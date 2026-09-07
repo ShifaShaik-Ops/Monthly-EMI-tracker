@@ -258,6 +258,7 @@ def forecast_df(months=24, salary_override=None):
     future_salary = float(get_setting("future_salary", 75000))
     future_start = pd.to_datetime(get_setting("future_salary_start", "2026-11-01"))
     start = pd.to_datetime(get_setting("forecast_start", "2026-10-01"))
+    closed_ids = foreclosed_loan_ids()
 
     rows = []
     for i, m in enumerate(months_from(start, months)):
@@ -265,8 +266,15 @@ def forecast_df(months=24, salary_override=None):
         if salary_override is not None:
             salary = salary_override
 
-        emi, detail = loan_emi_for_months(loans, i)
-        cards = total_cards()
+        emi = 0
+        detail = []
+        for _, r in loans.iterrows():
+            if int(r["id"]) in closed_ids:
+                continue
+            if int(r["remaining_months"]) > i:
+                emi += float(r["emi"])
+                detail.append((r["name"], float(r["emi"])))
+
         cash_flow = salary - living - emi
         rows.append({
             "Month": m.strftime("%b %Y"),
@@ -274,10 +282,28 @@ def forecast_df(months=24, salary_override=None):
             "Living": living,
             "EMI": emi,
             "Cash Flow Before Friend": cash_flow,
-            "Card Balance": cards,
-            "Loan EMI Count": sum(1 for _, e in detail if e > 0),
+            "Card Balance": total_cards(),
+            "Loan EMI Count": len(detail),
         })
     return pd.DataFrame(rows)
+
+def recommended_friend_plan():
+    """
+    Conservative package designed around the user's stated goal:
+    clear revolving cards and remove a few high-value EMIs without consuming
+    the entire friend-help amount.
+    """
+    loans = loans_df()
+    names = ["Flexipay", "Stashfin", "Instamoney"]
+    selected = loans[loans["name"].isin(names)].copy()
+    selected["Total Close"] = selected["foreclosure_amount"] + selected["foreclosure_charge"]
+    cost = float(selected["Total Close"].sum()) if not selected.empty else 0
+    emi_freed = float(selected["emi"].sum()) if not selected.empty else 0
+    cards = total_cards()
+    total_use = cost + cards
+    friend_cash = float(get_setting("friend_balance", get_setting("friend_help_amount", 400000)))
+    return selected, cost, emi_freed, cards, total_use, friend_cash
+
 
 def friend_plan(months=24):
     f = forecast_df(months)
@@ -345,6 +371,9 @@ if page == "🏠 Command Center":
     future_salary = float(get_setting("future_salary", 75000))
     living = total_living()
     emi = total_emi()
+    planned = planned_foreclosures_df()
+    planned_emi = float(planned["emi"].sum()) if not planned.empty else 0
+    effective_current_emi = max(0, emi - planned_emi)
     cards = total_cards()
     friend = float(get_setting("friend_balance", get_setting("friend_help_amount", 400000)))
     cash = float(get_setting("starting_cash", 20000))
@@ -353,17 +382,17 @@ if page == "🏠 Command Center":
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Current take-home", money(salary))
     c2.metric("Future target salary", money(future_salary))
-    c3.metric("Current loan EMIs", money(emi))
+    c3.metric("Active loan EMIs", money(effective_current_emi))
     c4.metric("Card balances", money(cards))
 
     st.divider()
 
     # Current cashflow
-    current_cf = salary - living - emi
+    current_cf = salary - living - effective_current_emi
     st.subheader("1. Your current monthly position")
     a, b, c, d = st.columns(4)
     a.metric("Living costs", money(living))
-    b.metric("Loan EMIs", money(emi))
+    b.metric("Loan EMIs", money(effective_current_emi))
     c.metric("Cash flow before friend", money(current_cf))
     d.metric("PF added monthly", money(pf))
 
@@ -859,14 +888,85 @@ elif page == "🤝 Friend Loan":
     c3.metric("Target date", target)
 
     st.info(
-        "The friend-help amount is fully editable. The app treats this as a separate debt "
-        "and automatically increases the suggested payment as salary rises and EMIs disappear."
+        "Important: the friend help is a lump-sum source of cash, NOT monthly income. "
+        "It only improves your monthly EMI cash flow after you use it to actually close loans. "
+        "This page now lets you apply the debt plan directly."
     )
 
+    # Recommended package
+    st.subheader("⭐ Recommended starting package")
+    rec, loan_cost, emi_freed, card_cost, total_use, friend_cash = recommended_friend_plan()
+    left = friend_cash - total_use
+
+    st.write(
+        "The app's conservative starting package is: "
+        "**Flexipay + Stashfin + Instamoney + clear the 3 card balances**."
+    )
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Loan closures", money(loan_cost))
+    r2.metric("Cards to clear", money(card_cost))
+    r3.metric("Total used", money(total_use))
+    r4.metric("Friend cash left", money(max(0, left)))
+
+    if left < 50000:
+        st.warning("This package would leave less than ₹50k of friend cash. Consider a smaller package.")
+    else:
+        st.success(
+            f"This package leaves about {money(left)} of friend cash while freeing about "
+            f"{money(emi_freed)}/month in EMIs."
+        )
+
+    if not rec.empty:
+        st.dataframe(
+            rec[["name", "emi", "remaining_months", "Total Close"]]
+            .rename(columns={
+                "name": "Loan",
+                "emi": "EMI freed",
+                "remaining_months": "Months left",
+                "Total Close": "Close cost",
+            }).style.format({
+                "EMI freed": "₹{:,.0f}",
+                "Close cost": "₹{:,.0f}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    apply = st.button("🚀 Apply this package to my forecast", type="primary")
+    if apply:
+        # Mark recommended loans as planned. Cards are cleared because the package explicitly includes them.
+        conn = db()
+        for _, r in rec.iterrows():
+            conn.execute("""
+                INSERT INTO foreclosures(loan_id,foreclosure_date,amount,charge,status)
+                SELECT ?,?,?,?,?,?
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM foreclosures
+                    WHERE loan_id=? AND status IN ('Planned','Paid')
+                )
+            """, (
+                int(r["id"]),
+                pd.to_datetime(get_setting("forecast_start", "2026-10-01")).date().isoformat(),
+                float(r["foreclosure_amount"]),
+                float(r["foreclosure_charge"]),
+                "Planned",
+                int(r["id"])
+            ))
+        conn.execute("UPDATE cards SET balance=0, minimum_due=0 WHERE active=1")
+        conn.commit()
+        conn.close()
+        st.success(
+            "Package applied. Flexipay/Stashfin/Instamoney are now treated as planned closures, "
+            "and the card balances are set to ₹0. Your forecast will now use the reduced EMI."
+        )
+        st.rerun()
+
+    st.divider()
     st.subheader("Step-up rules")
     st.write("""
     The built-in rule is intentionally conservative:
-    - Negative cash flow → ₹5k friend payment
+    - Negative cash flow → ₹0 friend payment
     - ₹0–₹10k cash flow → ₹10k
     - ₹10k–₹20k → ₹15k
     - ₹20k–₹30k → ₹25k
