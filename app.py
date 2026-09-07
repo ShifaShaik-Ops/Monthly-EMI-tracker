@@ -236,6 +236,23 @@ def total_living():
 def effective_foreclosure(row):
     return float(row["foreclosure_amount"]) + float(row["foreclosure_charge"])
 
+def planned_foreclosures_df():
+    """Return loans marked Planned or Paid for foreclosure."""
+    return qdf("""
+        SELECT f.id, f.loan_id, f.foreclosure_date, f.amount, f.charge, f.status,
+               l.name, l.emi, l.remaining_months
+        FROM foreclosures f
+        JOIN loans l ON l.id = f.loan_id
+        WHERE f.status IN ('Planned', 'Paid')
+        ORDER BY f.foreclosure_date DESC, f.id DESC
+    """)
+
+def foreclosed_loan_ids():
+    d = planned_foreclosures_df()
+    if d.empty:
+        return set()
+    return set(d["loan_id"].astype(int).tolist())
+
 def scheduled_remaining(row):
     return float(row["emi"]) * int(row["remaining_months"])
 
@@ -318,7 +335,7 @@ def friend_plan(months=24):
         if balance <= 0:
             pay = 0
         elif cf <= 0:
-            pay = 5000
+            pay = 0
         elif cf < 10000:
             pay = 10000
         elif cf < 20000:
@@ -390,6 +407,11 @@ if page == "🏠 Command Center":
     # Current cashflow
     current_cf = salary - living - effective_current_emi
     st.subheader("1. Your current monthly position")
+    if not planned.empty:
+        st.success(
+            f"Forecast is applying {len(planned)} planned foreclosure(s), "
+            f"freeing {money(planned_emi)}/month."
+        )
     a, b, c, d = st.columns(4)
     a.metric("Living costs", money(living))
     b.metric("Loan EMIs", money(effective_current_emi))
