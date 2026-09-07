@@ -404,6 +404,55 @@ if page == "🏠 Command Center":
 
     st.divider()
 
+    # One-click debt restructuring scenario
+    st.subheader("🎯 Apply the recommended ₹4L debt-restructuring scenario")
+    rec, rec_loan_cost, rec_emi_freed, rec_card_cost, rec_total_use, rec_friend_cash = recommended_friend_plan()
+    rec_left = rec_friend_cash - rec_total_use
+
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("Recommended debt cleared", money(rec_total_use))
+    rc2.metric("EMI freed", money(rec_emi_freed))
+    rc3.metric("Friend cash left", money(max(0, rec_left)))
+
+    st.caption(
+        "Default scenario: Flexipay + Stashfin + Instamoney + clear the 3 cards. "
+        "You can change the foreclosure quotes or friend amount before applying."
+    )
+
+    if st.button("🚀 APPLY RECOMMENDED SCENARIO", type="primary"):
+        conn = db()
+        forecast_date = pd.to_datetime(
+            get_setting("forecast_start", "2026-10-01")
+        ).date().isoformat()
+
+        for _, r in rec.iterrows():
+            exists = conn.execute(
+                "SELECT 1 FROM foreclosures WHERE loan_id=? AND status IN ('Planned','Paid') LIMIT 1",
+                (int(r["id"]),)
+            ).fetchone()
+            if not exists:
+                conn.execute("""
+                    INSERT INTO foreclosures
+                    (loan_id, foreclosure_date, amount, charge, status)
+                    VALUES (?,?,?,?,?)
+                """, (
+                    int(r["id"]),
+                    forecast_date,
+                    float(r["foreclosure_amount"]),
+                    float(r["foreclosure_charge"]),
+                    "Planned"
+                ))
+
+        # Only clear cards in the scenario after the user explicitly clicks Apply.
+        conn.execute("UPDATE cards SET balance=0, minimum_due=0 WHERE active=1")
+        conn.commit()
+        conn.close()
+
+        st.success(
+            "Scenario applied. The forecast now removes the selected loan EMIs and the card balances are ₹0."
+        )
+        st.rerun()
+
     # Current cashflow
     current_cf = salary - living - effective_current_emi
     st.subheader("1. Your current monthly position")
@@ -1023,6 +1072,19 @@ elif page == "🤝 Friend Loan":
         st.rerun()
 
     st.subheader("Projected step-up schedule")
+    current_planned = planned_foreclosures_df()
+    if current_planned.empty:
+        st.warning(
+            "⚠️ No foreclosure has been applied yet. The schedule below is therefore showing "
+            "the original EMI burden. Apply the recommended scenario above or mark individual "
+            "foreclosures under 🏦 Loans & Foreclosures."
+        )
+    else:
+        freed = float(current_planned["emi"].sum())
+        st.success(
+            f"✅ Forecast is using {len(current_planned)} planned foreclosure(s) and "
+            f"has removed {money(freed)}/month of EMI."
+        )
     fp = friend_plan(24)
     st.dataframe(
         fp[["Month", "Salary", "EMI", "Cash Flow Before Friend",
