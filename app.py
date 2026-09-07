@@ -5,13 +5,13 @@ from pathlib import Path
 import pandas as pd
 
 # ============================================================
-# APP CONFIG
+# CONFIG
 # ============================================================
 
 st.set_page_config(
-    page_title="Debt Manager",
+    page_title="Debt Escape Manager",
     page_icon="💰",
-    layout="wide",
+    layout="wide"
 )
 
 APP_DIR = Path(__file__).parent
@@ -19,42 +19,54 @@ DB_PATH = APP_DIR / "debt_manager.db"
 
 
 # ============================================================
-# HELPERS
+# MONEY FORMAT
 # ============================================================
 
 def money(value):
-    """Format Indian Rupees without scientific notation."""
-    if value is None:
-        value = 0
+    """
+    Indian currency formatting.
+    Example:
+    10000 -> ₹10,000
+    23742 -> ₹23,742
+    """
 
     try:
-        value = float(value)
+        value = float(value or 0)
     except:
         value = 0
 
     sign = "-" if value < 0 else ""
+
     value = abs(value)
 
-    # Indian number formatting
-    number = f"{value:,.0f}"
+    return f"{sign}₹{value:,.0f}"
 
-    return f"{sign}₹{number}"
 
+# ============================================================
+# DATABASE
+# ============================================================
 
 def db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+
+    conn = sqlite3.connect(
+        DB_PATH,
+        check_same_thread=False
+    )
+
     conn.row_factory = sqlite3.Row
+
     return conn
 
 
 def init_db():
 
     conn = db()
+
     c = conn.cursor()
 
-    # -----------------------------
+    # --------------------------------------------------------
     # SETTINGS
-    # -----------------------------
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS settings (
@@ -63,9 +75,9 @@ def init_db():
         )
     """)
 
-    # -----------------------------
+    # --------------------------------------------------------
     # LOANS
-    # -----------------------------
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS loans (
@@ -79,9 +91,9 @@ def init_db():
         )
     """)
 
-    # -----------------------------
+    # --------------------------------------------------------
     # CREDIT CARDS
-    # -----------------------------
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS cards (
@@ -94,9 +106,9 @@ def init_db():
         )
     """)
 
-    # -----------------------------
+    # --------------------------------------------------------
     # EXPENSES
-    # -----------------------------
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
@@ -109,9 +121,9 @@ def init_db():
         )
     """)
 
-    # -----------------------------
+    # --------------------------------------------------------
     # LOAN PAYMENTS
-    # -----------------------------
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS loan_payments (
@@ -124,9 +136,9 @@ def init_db():
         )
     """)
 
-    # -----------------------------
-    # CARD / CHEQ CYCLES
-    # -----------------------------
+    # --------------------------------------------------------
+    # CARD / CHEQ
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS card_cycles (
@@ -140,9 +152,9 @@ def init_db():
         )
     """)
 
-    # -----------------------------
+    # --------------------------------------------------------
     # NEW DEBTS
-    # -----------------------------
+    # --------------------------------------------------------
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS new_debts (
@@ -157,7 +169,7 @@ def init_db():
     """)
 
     # ========================================================
-    # DEFAULT SETTINGS
+    # DEFAULT USER DATA
     # ========================================================
 
     defaults = {
@@ -175,28 +187,37 @@ def init_db():
         "friend_loan": 80000,
 
         # Living expenses
+
         "rent": 15000,
+
         "fuel": 2000,
+
         "groceries": 2000,
+
         "misc": 2000,
+
         "jio": 1200,
+
         "salon": 2000,
 
         # CheQ
+
         "cheq_fee_per_card": 2000,
 
         # Minimum cash buffer
-        "emergency_buffer": 10000,
+
+        "emergency_buffer": 10000
     }
 
     for key, value in defaults.items():
 
         c.execute(
             """
-            INSERT OR IGNORE INTO settings(key,value)
-            VALUES (?,?)
+            INSERT OR IGNORE INTO settings
+            (key, value)
+            VALUES (?, ?)
             """,
-            (key, value),
+            (key, value)
         )
 
     # ========================================================
@@ -234,26 +255,26 @@ def init_db():
         c.execute(
             """
             INSERT OR IGNORE INTO loans
-            (name,emi,pending_months,emi_day,rotatable)
-            VALUES (?,?,?,?,?)
+            (name, emi, pending_months, emi_day, rotatable)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            loan,
+            loan
         )
 
     # ========================================================
-    # CREDIT CARDS
+    # CARDS
     # ========================================================
 
     cards = [
 
-        # Axis minimum is only an estimate.
+        # Axis minimum is an estimate
         ("Axis", 60000, 2000, 0),
 
-        # From statement supplied.
+        # HDFC statement supplied
         ("HDFC", 29656, 1816, 28),
 
-        # Use 36k as user's stated balance.
-        ("DBS", 36000, 1089.79, 1),
+        # User provided DBS balance
+        ("DBS", 36000, 1089.79, 1)
 
     ]
 
@@ -262,18 +283,19 @@ def init_db():
         c.execute(
             """
             INSERT OR IGNORE INTO cards
-            (name,balance,min_due,due_day)
-            VALUES (?,?,?,?)
+            (name, balance, min_due, due_day)
+            VALUES (?, ?, ?, ?)
             """,
-            card,
+            card
         )
 
     conn.commit()
+
     conn.close()
 
 
 # ============================================================
-# DATABASE FUNCTIONS
+# DATABASE READ FUNCTIONS
 # ============================================================
 
 def get_settings():
@@ -281,7 +303,7 @@ def get_settings():
     conn = db()
 
     rows = conn.execute(
-        "SELECT key,value FROM settings"
+        "SELECT key, value FROM settings"
     ).fetchall()
 
     conn.close()
@@ -298,13 +320,15 @@ def set_setting(key, value):
 
     conn.execute(
         """
-        INSERT OR REPLACE INTO settings(key,value)
-        VALUES (?,?)
+        INSERT OR REPLACE INTO settings
+        (key, value)
+        VALUES (?, ?)
         """,
-        (key, float(value)),
+        (key, float(value))
     )
 
     conn.commit()
+
     conn.close()
 
 
@@ -318,7 +342,7 @@ def loans_df():
         FROM loans
         ORDER BY pending_months ASC
         """,
-        conn,
+        conn
     )
 
     conn.close()
@@ -336,7 +360,7 @@ def cards_df():
         FROM cards
         ORDER BY balance DESC
         """,
-        conn,
+        conn
     )
 
     conn.close()
@@ -344,7 +368,25 @@ def cards_df():
     return df
 
 
-def payments_df():
+def expenses_df():
+
+    conn = db()
+
+    df = pd.read_sql_query(
+        """
+        SELECT *
+        FROM transactions
+        ORDER BY txn_date DESC, id DESC
+        """,
+        conn
+    )
+
+    conn.close()
+
+    return df
+
+
+def loan_payments_df():
 
     conn = db()
 
@@ -355,10 +397,10 @@ def payments_df():
             l.name
         FROM loan_payments lp
         LEFT JOIN loans l
-        ON l.id = lp.loan_id
-        ORDER BY pay_date DESC
+        ON lp.loan_id = l.id
+        ORDER BY lp.pay_date DESC, lp.id DESC
         """,
-        conn,
+        conn
     )
 
     conn.close()
@@ -377,28 +419,10 @@ def card_cycles_df():
             c.name
         FROM card_cycles cc
         LEFT JOIN cards c
-        ON c.id = cc.card_id
-        ORDER BY cycle_date DESC
+        ON cc.card_id = c.id
+        ORDER BY cc.cycle_date DESC, cc.id DESC
         """,
-        conn,
-    )
-
-    conn.close()
-
-    return df
-
-
-def expenses_df():
-
-    conn = db()
-
-    df = pd.read_sql_query(
-        """
-        SELECT *
-        FROM transactions
-        ORDER BY txn_date DESC
-        """,
-        conn,
+        conn
     )
 
     conn.close()
@@ -421,11 +445,11 @@ today = date.today()
 
 settings = get_settings()
 
-st.sidebar.title("⚙️ Your Financial Controls")
+st.sidebar.title("⚙️ Financial Controls")
 
 st.sidebar.caption(
     "Change your real numbers here. "
-    "The recommendations update automatically."
+    "The entire plan recalculates automatically."
 )
 
 
@@ -435,47 +459,47 @@ st.sidebar.caption(
 
 with st.sidebar.expander(
     "💰 Income & Cash",
-    expanded=True,
+    expanded=True
 ):
 
     salary = st.number_input(
         "Monthly take-home salary",
         min_value=0.0,
         value=float(settings["salary"]),
-        step=1000.0,
+        step=1000.0
     )
 
     savings = st.number_input(
         "Current savings",
         min_value=0.0,
         value=float(settings["savings"]),
-        step=1000.0,
+        step=1000.0
     )
 
     bonus = st.number_input(
         "Bonus this month",
         min_value=0.0,
         value=float(settings["bonus"]),
-        step=5000.0,
+        step=5000.0
     )
 
     annual_salary = st.number_input(
         "Annual salary",
         min_value=0.0,
         value=float(settings["annual_salary"]),
-        step=10000.0,
+        step=10000.0
     )
 
     increment = st.number_input(
         "Expected increment %",
         min_value=0.0,
         value=float(settings["increment_pct"]),
-        step=1.0,
+        step=1.0
     )
 
     if st.button(
         "Save income",
-        use_container_width=True,
+        use_container_width=True
     ):
 
         set_setting("salary", salary)
@@ -490,17 +514,16 @@ with st.sidebar.expander(
 
 
 # ============================================================
-# LIVING EXPENSES
+# EXPENSE SETTINGS
 # ============================================================
 
 with st.sidebar.expander(
-    "🏠 Living Expenses",
-    expanded=False,
+    "🏠 Monthly Living Expenses"
 ):
 
-    expense_values = {}
+    living_inputs = {}
 
-    expense_items = [
+    items = [
 
         ("rent", "Rent"),
 
@@ -516,25 +539,30 @@ with st.sidebar.expander(
 
     ]
 
-    for key, label in expense_items:
+    for key, label in items:
 
-        expense_values[key] = st.number_input(
+        living_inputs[key] = st.number_input(
             label,
             min_value=0.0,
             value=float(settings[key]),
-            step=100.0,
+            step=100.0
         )
 
     if st.button(
-        "Save living expenses",
-        use_container_width=True,
+        "Save expenses",
+        use_container_width=True
     ):
 
-        for key, value in expense_values.items():
+        for key, value in living_inputs.items():
 
-            set_setting(key, value)
+            set_setting(
+                key,
+                value
+            )
 
-        st.success("Living expenses updated.")
+        st.success(
+            "Living expenses updated."
+        )
 
         st.rerun()
 
@@ -544,40 +572,45 @@ with st.sidebar.expander(
 # ============================================================
 
 with st.sidebar.expander(
-    "💳 Debt Rules",
-    expanded=False,
+    "💳 Debt Settings"
 ):
 
     cheq_fee = st.number_input(
-        "CheQ fee per rotated card",
+        "CheQ fee per card",
         min_value=0.0,
-        value=float(settings["cheq_fee_per_card"]),
-        step=100.0,
+        value=float(
+            settings["cheq_fee_per_card"]
+        ),
+        step=100.0
     )
 
     emergency_buffer = st.number_input(
-        "Minimum emergency buffer",
+        "Minimum cash buffer",
         min_value=0.0,
-        value=float(settings["emergency_buffer"]),
-        step=1000.0,
+        value=float(
+            settings["emergency_buffer"]
+        ),
+        step=1000.0
     )
 
     if st.button(
-        "Save debt rules",
-        use_container_width=True,
+        "Save debt settings",
+        use_container_width=True
     ):
 
         set_setting(
             "cheq_fee_per_card",
-            cheq_fee,
+            cheq_fee
         )
 
         set_setting(
             "emergency_buffer",
-            emergency_buffer,
+            emergency_buffer
         )
 
-        st.success("Debt rules updated.")
+        st.success(
+            "Debt settings updated."
+        )
 
         st.rerun()
 
@@ -592,37 +625,24 @@ loans = loans_df()
 
 cards = cards_df()
 
-# ============================================================
-# CALCULATIONS
-# ============================================================
-
 active_loans = loans[
     loans["active"] == 1
-]
+].copy()
 
 active_cards = cards[
     cards["active"] == 1
-]
+].copy()
 
 
-# Monthly EMI
+# ============================================================
+# CORE CALCULATIONS
+# ============================================================
+
 monthly_emi = float(
     active_loans["emi"].sum()
 )
 
-
-# Estimated remaining EMI outflow
-estimated_loan_outstanding = float(
-    (
-        active_loans["emi"]
-        *
-        active_loans["pending_months"]
-    ).sum()
-)
-
-
-# Living expenses
-living_expenses = sum(
+living_cost = sum(
     settings[key]
     for key in [
         "rent",
@@ -630,48 +650,36 @@ living_expenses = sum(
         "groceries",
         "misc",
         "jio",
-        "salon",
+        "salon"
     ]
 )
 
-
-# Card balances
 card_balance = float(
     active_cards["balance"].sum()
 )
 
-
-# Card minimums
-card_minimums = float(
+card_minimum = float(
     active_cards["min_due"].sum()
 )
 
-
-# CheQ cost if all active cards rotated
-potential_cheq_fees = (
-    len(active_cards)
-    *
-    settings["cheq_fee_per_card"]
-)
-
-
-# Monthly structural gap
-monthly_required = (
-    monthly_emi
-    +
-    living_expenses
-)
-
-
-monthly_gap = (
-    monthly_required
-    -
+salary = float(
     settings["salary"]
 )
 
+monthly_required = (
+    living_cost
+    +
+    monthly_emi
+)
 
-# Expected salary after increment
-expected_annual_salary = (
+monthly_shortage = (
+    monthly_required
+    -
+    salary
+)
+
+
+expected_annual = (
     settings["annual_salary"]
     *
     (
@@ -684,7 +692,7 @@ expected_annual_salary = (
 )
 
 expected_monthly_gross = (
-    expected_annual_salary
+    expected_annual
     /
     12
 )
@@ -695,12 +703,11 @@ expected_monthly_gross = (
 # ============================================================
 
 st.title(
-    "💰 Debt Manager — Real Cash Flow & Exit Plan"
+    "💰 Debt Escape Manager"
 )
 
 st.caption(
-    "This is an action dashboard. "
-    "Record what actually happened and the recommendations change."
+    "Your goal: survive the debt bridge without taking another loan."
 )
 
 
@@ -708,85 +715,94 @@ st.caption(
 # TOP METRICS
 # ============================================================
 
-col1, col2, col3, col4 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 
-col1.metric(
+c1.metric(
+    "Salary",
+    money(salary)
+)
+
+c2.metric(
     "Monthly EMIs",
-    money(monthly_emi),
+    money(monthly_emi)
 )
 
-col2.metric(
+c3.metric(
     "Living Costs",
-    money(living_expenses),
+    money(living_cost)
 )
 
-col3.metric(
-    "Card Balance",
-    money(card_balance),
-)
+if monthly_shortage > 0:
 
-if monthly_gap > 0:
-
-    col4.metric(
-        "Monthly Shortfall",
-        money(monthly_gap),
+    c4.metric(
+        "Monthly Shortage",
+        money(monthly_shortage)
     )
 
 else:
 
-    col4.metric(
+    c4.metric(
         "Monthly Surplus",
-        money(abs(monthly_gap)),
+        money(abs(monthly_shortage))
     )
 
 
 # ============================================================
-# MAIN TABS
+# TABS
 # ============================================================
 
 tabs = st.tabs(
     [
-        "🏠 Action Plan",
+        "🚨 NO NEW LOAN PLAN",
+        "🏠 Daily Decision",
         "🏦 Loans",
         "💳 Cards + CheQ",
         "💸 Expenses",
         "📈 Forecast",
-        "⚙️ Data",
+        "⚙️ Data"
     ]
 )
 
 
 # ============================================================
-# ACTION PLAN
+# TAB 1
+# NO NEW LOAN PLAN
 # ============================================================
 
 with tabs[0]:
 
     st.header(
-        "What should you do right now?"
+        "🚨 No-New-Loan Plan"
     )
 
+    st.caption(
+        "This is the most important screen. "
+        "It answers: 'How do I survive the shortage without taking another loan?'"
+    )
+
+
     # --------------------------------------------------------
-    # MAIN FINANCIAL DIAGNOSIS
+    # CURRENT STRUCTURAL GAP
     # --------------------------------------------------------
 
-    if monthly_gap > 0:
+    if monthly_shortage > 0:
 
         st.error(
             f"""
-            Your current salary does not cover your normal monthly
-            commitments.
+            You currently have a structural shortage of
+            **{money(monthly_shortage)} per month.**
 
-            Salary: {money(settings["salary"])}
+            Salary: {money(salary)}
 
-            Living expenses: {money(living_expenses)}
+            Living costs: {money(living_cost)}
 
             EMIs: {money(monthly_emi)}
 
-            Monthly shortfall: {money(monthly_gap)}
+            The objective is NOT to solve the entire shortage with
+            another loan.
 
-            This is the main reason you are relying on credit-card
-            rotation.
+            The objective is to bridge the next few months until
+            your EMIs naturally disappear.
             """
         )
 
@@ -794,78 +810,246 @@ with tabs[0]:
 
         st.success(
             f"""
-            Your salary currently covers your living expenses and EMIs.
+            Your salary currently covers your living expenses
+            and scheduled EMIs.
 
-            You have approximately
-            {money(abs(monthly_gap))}
-            left before extra debt payments.
+            Current surplus:
+            **{money(abs(monthly_shortage))}**
             """
         )
 
 
+    # ========================================================
+    # MONTH-BY-MONTH BRIDGE
+    # ========================================================
+
+    st.subheader(
+        "📅 Your shortage will reduce as loans finish"
+    )
+
+
+    max_months = max(
+        24,
+        int(
+            active_loans[
+                "pending_months"
+            ].max()
+        )
+        if not active_loans.empty
+        else 24
+    )
+
+
+    bridge_rows = []
+
+    cumulative_shortage = 0
+
+    turning_point = None
+
+
+    for month in range(
+        1,
+        max_months + 1
+    ):
+
+        emi_for_month = float(
+            active_loans.loc[
+                active_loans[
+                    "pending_months"
+                ] >= month,
+                "emi"
+            ].sum()
+        )
+
+
+        monthly_cash_flow = (
+            salary
+            -
+            living_cost
+            -
+            emi_for_month
+        )
+
+
+        if monthly_cash_flow < 0:
+
+            shortage = abs(
+                monthly_cash_flow
+            )
+
+        else:
+
+            shortage = 0
+
+
+        cumulative_shortage += shortage
+
+
+        if (
+            turning_point is None
+            and
+            monthly_cash_flow >= 0
+        ):
+
+            turning_point = month
+
+
+        bridge_rows.append(
+            {
+                "Month": month,
+
+                "EMIs": emi_for_month,
+
+                "Cash Flow": monthly_cash_flow,
+
+                "Shortage": shortage,
+
+                "Cumulative Bridge Needed":
+                    cumulative_shortage
+            }
+        )
+
+
+    bridge = pd.DataFrame(
+        bridge_rows
+    )
+
+
     # --------------------------------------------------------
-    # CHEQ WARNING
+    # TURNING POINT
     # --------------------------------------------------------
 
-    if len(active_cards) > 0:
+    if turning_point:
 
-        st.warning(
+        turning_emi = float(
+            bridge.loc[
+                bridge["Month"]
+                ==
+                turning_point,
+                "EMIs"
+            ].iloc[0]
+        )
+
+        turning_surplus = (
+            salary
+            -
+            living_cost
+            -
+            turning_emi
+        )
+
+
+        st.success(
             f"""
-            If you rotate all {len(active_cards)} cards through CheQ,
-            the estimated convenience cost is:
+            🎯 **Turning point: Month {turning_point}**
 
-            {money(potential_cheq_fees)}
+            At that point your scheduled EMI burden falls to
+            approximately **{money(turning_emi)}**.
 
-            per rotation cycle.
+            Your monthly cash flow becomes approximately:
 
-            This should be treated as a real expense, not as debt
-            repayment.
+            **+{money(turning_surplus)}**
+
+            This means the current shortage is a temporary
+            bridge problem — provided you don't add another EMI.
             """
         )
 
 
     # --------------------------------------------------------
-    # CURRENT MONTH SIMULATION
+    # FIRST 6 MONTHS
     # --------------------------------------------------------
 
-    st.header(
-        "📅 This Month Cash Simulation"
+    first_six = bridge[
+        bridge["Month"] <= 6
+    ].copy()
+
+
+    total_bridge = float(
+        first_six[
+            "Shortage"
+        ].sum()
     )
 
-    st.caption(
-        "This shows whether your current cash can survive the month."
+
+    st.metric(
+        "Estimated shortage to bridge over first 6 months",
+        money(total_bridge)
     )
 
 
-    starting_savings = settings["savings"]
-
-    salary_received = settings["salary"]
-
-    bonus_received = settings["bonus"]
-
-    friend_repayment = settings["friend_loan"]
+    display_bridge = first_six.copy()
 
 
-    total_cash_available = (
-        starting_savings
+    display_bridge[
+        "EMIs"
+    ] = display_bridge[
+        "EMIs"
+    ].apply(money)
+
+
+    display_bridge[
+        "Cash Flow"
+    ] = display_bridge[
+        "Cash Flow"
+    ].apply(money)
+
+
+    display_bridge[
+        "Shortage"
+    ] = display_bridge[
+        "Shortage"
+    ].apply(money)
+
+
+    display_bridge[
+        "Cumulative Bridge Needed"
+    ] = display_bridge[
+        "Cumulative Bridge Needed"
+    ].apply(money)
+
+
+    st.dataframe(
+        display_bridge,
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+    # ========================================================
+    # THIS MONTH CASH
+    # ========================================================
+
+    st.subheader(
+        "💵 This Month — Where will the money come from?"
+    )
+
+
+    total_cash = (
+        settings["savings"]
         +
-        salary_received
+        settings["salary"]
         +
-        bonus_received
+        settings["bonus"]
     )
+
+
+    friend_payment = settings[
+        "friend_loan"
+    ]
 
 
     cash_after_friend = (
-        total_cash_available
+        total_cash
         -
-        friend_repayment
+        friend_payment
     )
 
 
     cash_after_living = (
         cash_after_friend
         -
-        living_expenses
+        living_cost
     )
 
 
@@ -876,469 +1060,814 @@ with tabs[0]:
     )
 
 
-    cash_after_cards = (
+    cash_after_minimums = (
         cash_after_emi
         -
-        card_minimums
+        card_minimum
     )
 
 
-    simulation = pd.DataFrame(
+    this_month = pd.DataFrame(
         [
             [
                 "Starting savings",
-                starting_savings,
+                settings["savings"]
             ],
+
             [
                 "Salary",
-                salary_received,
+                settings["salary"]
             ],
+
             [
                 "Bonus",
-                bonus_received,
+                settings["bonus"]
             ],
+
             [
-                "Friend loan repayment",
-                -friend_repayment,
+                "Friend loan",
+                -friend_payment
             ],
+
             [
                 "Living expenses",
-                -living_expenses,
+                -living_cost
             ],
+
             [
-                "Scheduled EMIs",
-                -monthly_emi,
+                "EMIs",
+                -monthly_emi
             ],
+
             [
-                "Card minimum payments",
-                -card_minimums,
+                "Card minimums",
+                -card_minimum
             ],
+
             [
                 "Cash remaining",
-                cash_after_cards,
-            ],
+                cash_after_minimums
+            ]
         ],
         columns=[
             "Item",
-            "Amount",
-        ],
+            "Amount"
+        ]
     )
 
 
-    # Format money as text so Streamlit never displays 1e+04
-    simulation["Amount"] = simulation[
+    this_month[
+        "Amount"
+    ] = this_month[
         "Amount"
     ].apply(money)
 
 
     st.dataframe(
-        simulation,
+        this_month,
         hide_index=True,
-        use_container_width=True,
+        use_container_width=True
     )
 
 
-    # --------------------------------------------------------
-    # CASH RESULT
-    # --------------------------------------------------------
+    # ========================================================
+    # EXACT MONTHLY ACTION
+    # ========================================================
 
-    if cash_after_cards < 0:
+    st.subheader(
+        "🎯 What you should do"
+    )
+
+
+    if cash_after_minimums < 0:
 
         st.error(
             f"""
-            🔴 You are approximately
-            {money(abs(cash_after_cards))}
-            short after clearing your friend loan,
-            living expenses, EMIs and card minimums.
+            🔴 **DO NOT MAKE EXTRA DEBT PAYMENTS THIS MONTH.**
 
-            Therefore:
+            You are approximately
+            **{money(abs(cash_after_minimums))}**
+            short after:
 
-            **Do NOT make an extra loan/card payment this month.**
+            • Friend loan
+            • Living expenses
+            • EMIs
+            • Card minimums
 
-            Your priority is preventing another borrowing cycle.
+            Making an extra payment would probably force you
+            to borrow again.
+
+            Your priority is simply to survive this month.
             """
         )
 
-    elif cash_after_cards < settings["emergency_buffer"]:
+    elif cash_after_minimums < settings[
+        "emergency_buffer"
+    ]:
 
         st.warning(
             f"""
-            🟠 You would have only
-            {money(cash_after_cards)}
-            remaining.
+            🟠 Keep your remaining
+            **{money(cash_after_minimums)}**
+            as cash.
 
-            Keep this as cash buffer instead of making an aggressive
-            extra debt payment.
+            Do not make an aggressive debt payment.
+
+            You need liquidity to prevent another loan.
             """
         )
 
     else:
 
-        extra_available = (
-            cash_after_cards
+        available = (
+            cash_after_minimums
             -
             settings["emergency_buffer"]
         )
 
+
         st.success(
             f"""
-            🟢 After mandatory payments you have
-            {money(cash_after_cards)}
-            remaining.
-
-            After keeping your
+            🟢 You can potentially use
+            **{money(available)}**
+            for debt reduction after maintaining your
             {money(settings["emergency_buffer"])}
-            emergency buffer, approximately
-
-            **{money(extra_available)}**
-
-            could potentially be used for debt reduction.
+            cash buffer.
             """
         )
 
 
     # ========================================================
-    # RECOMMENDATIONS
+    # HOW TO BRIDGE
     # ========================================================
 
-    st.header(
-        "🎯 Your Debt Strategy"
+    st.subheader(
+        "🛟 How to bridge the shortage"
     )
 
 
-    recommendations = []
+    # Suggested cuts
+    salon_cut = min(
+        settings["salon"],
+        2000
+    )
+
+    misc_cut = min(
+        settings["misc"],
+        1000
+    )
+
+    grocery_cut = min(
+        settings["groceries"] * 0.25,
+        500
+    )
 
 
-    # Recommendation 1
-    if settings["friend_loan"] > 0:
+    possible_cuts = (
+        salon_cut
+        +
+        misc_cut
+        +
+        grocery_cut
+    )
 
-        recommendations.append(
-            (
-                "1️⃣",
-                "Clear the friend loan",
-                f"""
-                You have a personal loan of
-                {money(settings["friend_loan"])}
-                that you said needs to be cleared this month.
 
-                Handle this before aggressive credit-card repayment.
-                """
+    st.markdown(
+        f"""
+        ### Step 1 — Reduce discretionary spending temporarily
+
+        Suggested temporary cuts:
+
+        • Salon: **{money(salon_cut)}**
+
+        • Miscellaneous: **{money(misc_cut)}**
+
+        • Groceries: **{money(grocery_cut)}**
+
+        Potential monthly reduction:
+        **{money(possible_cuts)}**
+
+        This is not meant to be permanent.
+        The purpose is to survive the debt bridge.
+        """
+    )
+
+
+    reduced_shortage = max(
+        0,
+        monthly_shortage
+        -
+        possible_cuts
+    )
+
+
+    st.info(
+        f"""
+        After these suggested cuts, your monthly shortage could
+        fall from {money(monthly_shortage)}
+        to approximately **{money(reduced_shortage)}**.
+        """
+    )
+
+
+    # ========================================================
+    # CHEQ OPTIONS
+    # ========================================================
+
+    st.subheader(
+        "💳 If you absolutely need card rotation"
+    )
+
+
+    options = []
+
+
+    for number in range(
+        0,
+        len(active_cards) + 1
+    ):
+
+        fee = (
+            number
+            *
+            settings["cheq_fee_per_card"]
+        )
+
+
+        if number == 0:
+
+            description = (
+                "No card rotation"
             )
+
+        else:
+
+            description = (
+                f"Rotate {number} card"
+                +
+                ("s" if number > 1 else "")
+            )
+
+
+        options.append(
+            {
+                "Option": description,
+
+                "CheQ Fee": fee,
+
+                "Extra Cost": fee
+            }
         )
 
 
-    # Recommendation 2
-    recommendations.append(
-        (
-            "2️⃣",
-            "Stop increasing revolving debt",
-            f"""
-            Your three cards total approximately
-            {money(card_balance)}.
-
-            Paying the cards and immediately recycling the money
-            through CheQ does not eliminate the underlying borrowing.
-
-            The objective is:
-
-            **Total card/CheQ debt ↓ every month.**
-            """
-        )
+    cheq_df = pd.DataFrame(
+        options
     )
 
 
-    # Recommendation 3
-    recommendations.append(
-        (
-            "3️⃣",
-            "Let short loans finish",
-            """
-            Do not replace an EMI that disappears with new spending.
+    cheq_df[
+        "CheQ Fee"
+    ] = cheq_df[
+        "CheQ Fee"
+    ].apply(money)
 
-            Every finished loan creates permanent monthly cash flow.
-            That freed amount should be redirected toward your
-            revolving debt.
-            """
-        )
+
+    cheq_df[
+        "Extra Cost"
+    ] = cheq_df[
+        "Extra Cost"
+    ].apply(money)
+
+
+    st.dataframe(
+        cheq_df,
+        hide_index=True,
+        use_container_width=True
     )
 
 
-    # Recommendation 4
-    recommendations.append(
-        (
-            "4️⃣",
-            "Build a controlled cash buffer",
-            f"""
-            Keep at least
-            {money(settings["emergency_buffer"])}
-            available.
+    st.warning(
+        """
+        **Rule:**
 
-            Without a buffer, even a small emergency can push you
-            back into card/CheQ borrowing.
-            """
-        )
+        Use the minimum number of cards necessary.
+
+        Do NOT automatically rotate all three cards.
+
+        Every additional card costs approximately ₹2,000 in your
+        current CheQ setup.
+        """
     )
 
 
-    # Recommendation 5
-    recommendations.append(
-        (
-            "5️⃣",
-            "Use every freed EMI for debt reduction",
-            """
-            When an EMI disappears, treat that money as already
-            committed to debt repayment.
+    # ========================================================
+    # FUTURE FREED EMI
+    # ========================================================
 
-            Do not increase your lifestyle spending.
-            """
-        )
+    st.subheader(
+        "🚀 Your upcoming breathing room"
     )
 
 
-    for number, title, description in recommendations:
+    future = active_loans[
+        active_loans[
+            "pending_months"
+        ] <= 12
+    ].sort_values(
+        "pending_months"
+    )
+
+
+    for _, row in future.iterrows():
 
         st.markdown(
             f"""
-            ### {number} {title}
+            **{row["name"]}**
 
-            {description}
+            {int(row["pending_months"])} month(s) left
+
+            → {money(row["emi"])}
+            monthly EMI will disappear.
             """
         )
 
 
+    st.success(
+        """
+        **Golden rule:**
+
+        When an EMI disappears, do NOT increase spending.
+
+        Redirect the entire EMI toward your credit-card/CheQ debt.
+
+        That is how the temporary shortage becomes a permanent
+        surplus.
+        """
+    )
+
+
 # ============================================================
-# LOANS
+# TAB 2
+# DAILY DECISION
 # ============================================================
 
 with tabs[1]:
 
     st.header(
-        "🏦 Loan Management"
+        "🏠 Daily Financial Decision"
     )
 
     st.caption(
-        "Record each EMI after you actually pay it."
+        "Use this before spending or borrowing."
     )
 
 
-    display_loans = loans.copy()
+    # --------------------------------------------------------
+    # SAFE SPENDING
+    # --------------------------------------------------------
 
-    display_loans[
-        "Estimated Remaining"
-    ] = (
-        display_loans["emi"]
-        *
-        display_loans["pending_months"]
+    st.subheader(
+        "💰 Can I spend this money?"
     )
 
 
-    display_loans[
-        "EMI"
-    ] = display_loans["emi"].apply(money)
+    requested_spend = st.number_input(
+        "Amount I want to spend",
+        min_value=0.0,
+        step=100.0,
+        key="spend_check"
+    )
 
-    display_loans[
-        "Estimated Remaining"
-    ] = display_loans[
-        "Estimated Remaining"
+
+    # Basic safe spending calculation
+    safe_cash = (
+        settings["savings"]
+        -
+        settings["emergency_buffer"]
+    )
+
+
+    if requested_spend > 0:
+
+        if safe_cash >= requested_spend:
+
+            st.success(
+                f"""
+                🟢 This expense is affordable from your current
+                savings buffer.
+
+                After spending:
+
+                **{money(safe_cash - requested_spend)}**
+                would remain above your minimum buffer.
+                """
+            )
+
+        else:
+
+            st.error(
+                f"""
+                🔴 I would NOT recommend this expense right now.
+
+                Your usable cash above the emergency buffer is only
+                {money(max(0, safe_cash))}.
+
+                Spending {money(requested_spend)} would increase
+                the probability of needing card/CheQ borrowing.
+                """
+            )
+
+
+    # ========================================================
+    # MONEY AVAILABLE DECISION
+    # ========================================================
+
+    st.subheader(
+        "💵 I received extra money — what should I do?"
+    )
+
+
+    extra_money = st.number_input(
+        "Extra money available",
+        min_value=0.0,
+        step=1000.0,
+        key="extra_money"
+    )
+
+
+    if extra_money > 0:
+
+        if monthly_shortage > 0:
+
+            st.warning(
+                f"""
+                **Recommendation: KEEP THE MONEY.**
+
+                Your current monthly cash flow is negative by
+                {money(monthly_shortage)}.
+
+                Until your monthly cash flow becomes positive,
+                extra money should primarily be used to prevent
+                new borrowing.
+
+                Suggested use:
+
+                1. Keep emergency buffer.
+                2. Cover upcoming EMI shortage.
+                3. Avoid large early repayments.
+                """
+            )
+
+        else:
+
+            debt_payment = max(
+                0,
+                extra_money
+                -
+                settings["emergency_buffer"]
+            )
+
+
+            st.success(
+                f"""
+                Your monthly cash flow is positive.
+
+                Keep approximately
+                {money(settings["emergency_buffer"])}
+                as buffer.
+
+                Potential debt payment:
+
+                **{money(debt_payment)}**
+                """
+            )
+
+
+    # ========================================================
+    # NEW LOAN DECISION
+    # ========================================================
+
+    st.subheader(
+        "🚨 Should I take a new loan?"
+    )
+
+
+    new_loan_amount = st.number_input(
+        "Loan amount",
+        min_value=0.0,
+        step=1000.0,
+        key="new_loan_amount"
+    )
+
+
+    new_loan_emi = st.number_input(
+        "New monthly EMI",
+        min_value=0.0,
+        step=100.0,
+        key="new_loan_emi"
+    )
+
+
+    if new_loan_amount > 0:
+
+        new_gap = (
+            monthly_shortage
+            +
+            new_loan_emi
+        )
+
+
+        if monthly_shortage > 0:
+
+            st.error(
+                f"""
+                🔴 **DO NOT TAKE THIS LOAN unless it is genuinely
+                unavoidable.**
+
+                You already have a monthly shortage of
+                {money(monthly_shortage)}.
+
+                This loan would add another
+                {money(new_loan_emi)}
+                every month.
+
+                Your new structural shortage would be approximately:
+
+                **{money(new_gap)} / month**
+
+                Your current problem is already temporary because
+                several existing loans are ending.
+                """
+            )
+
+        else:
+
+            st.warning(
+                f"""
+                🟠 Your current salary covers your existing
+                commitments, but this loan would add
+                {money(new_loan_emi)}
+                per month.
+
+                Avoid it unless the borrowing has a clear,
+                necessary purpose.
+                """
+            )
+
+
+# ============================================================
+# TAB 3
+# LOANS
+# ============================================================
+
+with tabs[2]:
+
+    st.header(
+        "🏦 Loans"
+    )
+
+
+    display = active_loans.copy()
+
+
+    display[
+        "Monthly EMI"
+    ] = display[
+        "emi"
     ].apply(money)
 
 
-    display_loans = display_loans[
+    display[
+        "Remaining EMI Outflow"
+    ] = (
+        active_loans["emi"]
+        *
+        active_loans[
+            "pending_months"
+        ]
+    ).apply(money)
+
+
+    display = display[
         [
             "name",
-            "EMI",
+            "Monthly EMI",
             "pending_months",
             "emi_day",
-            "Estimated Remaining",
+            "Remaining EMI Outflow"
         ]
     ]
 
 
-    display_loans.columns = [
+    display.columns = [
         "Loan",
         "Monthly EMI",
         "Months Left",
         "EMI Day",
-        "Remaining EMI Outflow",
+        "Remaining EMI Outflow"
     ]
 
 
     st.dataframe(
-        display_loans,
+        display,
         hide_index=True,
-        use_container_width=True,
+        use_container_width=True
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # RECORD PAYMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
-        "✅ Record a loan payment"
+        "✅ I paid an EMI"
     )
 
 
     loan_map = dict(
         zip(
-            loans["name"],
-            loans["id"],
+            active_loans["name"],
+            active_loans["id"]
         )
     )
 
 
-    with st.form("loan_payment_form"):
+    if loan_map:
 
-        loan_name = st.selectbox(
-            "Loan",
-            list(loan_map.keys()),
-        )
+        with st.form(
+            "loan_payment"
+        ):
 
-        amount_paid = st.number_input(
-            "Amount actually paid",
-            min_value=0.0,
-            step=100.0,
-        )
-
-        months_reduced = st.number_input(
-            "Months reduced",
-            min_value=1,
-            max_value=60,
-            value=1,
-            step=1,
-        )
-
-        payment_note = st.text_input(
-            "Note",
-            "Regular EMI",
-        )
-
-        submit_payment = st.form_submit_button(
-            "Record payment",
-            use_container_width=True,
-        )
-
-
-    if submit_payment:
-
-        conn = db()
-
-        loan_id = loan_map[
-            loan_name
-        ]
-
-
-        conn.execute(
-            """
-            INSERT INTO loan_payments
-            (
-                loan_id,
-                pay_date,
-                amount,
-                months_reduced,
-                note
+            selected_loan = st.selectbox(
+                "Loan",
+                list(
+                    loan_map.keys()
+                )
             )
-            VALUES (?,?,?,?,?)
-            """,
-            (
-                loan_id,
-                str(today),
-                amount_paid,
-                months_reduced,
-                payment_note,
-            ),
-        )
 
 
-        conn.execute(
-            """
-            UPDATE loans
-
-            SET
-
-                pending_months =
-                    MAX(
-                        0,
-                        pending_months - ?
-                    ),
-
-                active =
-                    CASE
-                        WHEN pending_months - ? <= 0
-                        THEN 0
-                        ELSE 1
-                    END
-
-            WHERE id = ?
-            """,
-            (
-                months_reduced,
-                months_reduced,
-                loan_id,
-            ),
-        )
+            amount = st.number_input(
+                "Amount paid",
+                min_value=0.0,
+                step=100.0
+            )
 
 
-        conn.commit()
-        conn.close()
+            months = st.number_input(
+                "Months reduced",
+                min_value=1,
+                max_value=60,
+                value=1
+            )
 
 
-        st.success(
-            f"{loan_name} updated successfully."
-        )
+            note = st.text_input(
+                "Note",
+                "Regular EMI"
+            )
 
-        st.rerun()
+
+            submit = st.form_submit_button(
+                "Record payment"
+            )
 
 
-    # --------------------------------------------------------
+        if submit:
+
+            conn = db()
+
+
+            loan_id = loan_map[
+                selected_loan
+            ]
+
+
+            conn.execute(
+                """
+                INSERT INTO loan_payments
+                (
+                    loan_id,
+                    pay_date,
+                    amount,
+                    months_reduced,
+                    note
+                )
+                VALUES (?,?,?,?,?)
+                """,
+                (
+                    loan_id,
+                    str(today),
+                    amount,
+                    months,
+                    note
+                )
+            )
+
+
+            conn.execute(
+                """
+                UPDATE loans
+
+                SET
+
+                    pending_months =
+                        MAX(
+                            0,
+                            pending_months - ?
+                        ),
+
+                    active =
+                        CASE
+
+                            WHEN
+                                pending_months - ?
+                                <= 0
+
+                            THEN 0
+
+                            ELSE 1
+
+                        END
+
+                WHERE id = ?
+                """,
+                (
+                    months,
+                    months,
+                    loan_id
+                )
+            )
+
+
+            conn.commit()
+
+            conn.close()
+
+
+            st.success(
+                f"{selected_loan} updated."
+            )
+
+
+            st.rerun()
+
+
+    # ========================================================
     # NEW LOAN
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
-        "➕ Add a new loan"
+        "➕ Add new loan"
     )
 
 
-    with st.form("new_loan_form"):
+    with st.form(
+        "new_loan"
+    ):
 
         lender = st.text_input(
             "Lender"
         )
 
+
         loan_amount = st.number_input(
             "Loan amount",
             min_value=0.0,
-            step=1000.0,
+            step=1000.0
         )
+
 
         new_emi = st.number_input(
             "Monthly EMI",
             min_value=0.0,
-            step=100.0,
+            step=100.0
         )
 
-        loan_months = st.number_input(
-            "Number of months",
+
+        months = st.number_input(
+            "Months",
             min_value=1,
             max_value=120,
-            value=6,
-        )
-
-        loan_reason = st.text_input(
-            "Reason for loan"
-        )
-
-        add_loan = st.form_submit_button(
-            "Add loan",
-            use_container_width=True,
+            value=6
         )
 
 
-    if add_loan:
+        reason = st.text_input(
+            "Reason"
+        )
+
+
+        add = st.form_submit_button(
+            "Add loan"
+        )
+
+
+    if add:
 
         if lender and loan_amount > 0:
 
             conn = db()
+
 
             conn.execute(
                 """
@@ -1358,9 +1887,9 @@ with tabs[1]:
                     lender,
                     loan_amount,
                     new_emi,
-                    loan_months,
-                    loan_reason,
-                ),
+                    months,
+                    reason
+                )
             )
 
 
@@ -1379,14 +1908,15 @@ with tabs[1]:
                 (
                     lender,
                     new_emi,
-                    loan_months,
+                    months,
                     1,
-                    0,
-                ),
+                    0
+                )
             )
 
 
             conn.commit()
+
             conn.close()
 
 
@@ -1394,34 +1924,16 @@ with tabs[1]:
                 "New loan added."
             )
 
+
             st.rerun()
 
 
-    # --------------------------------------------------------
-    # PAYMENT HISTORY
-    # --------------------------------------------------------
-
-    payment_history = payments_df()
-
-
-    if not payment_history.empty:
-
-        st.subheader(
-            "Recent loan payments"
-        )
-
-        st.dataframe(
-            payment_history,
-            hide_index=True,
-            use_container_width=True,
-        )
-
-
 # ============================================================
+# TAB 4
 # CARDS + CHEQ
 # ============================================================
 
-with tabs[2]:
+with tabs[3]:
 
     st.header(
         "💳 Credit Cards + CheQ"
@@ -1430,29 +1942,45 @@ with tabs[2]:
 
     st.warning(
         """
-        Important:
+        Your strategy is different from normal card repayment.
 
-        If you pay a credit card in full and then use CheQ to
-        move the money back into your bank account, the card may
-        show ₹0 but the debt has NOT actually disappeared.
+        You pay the complete card bill and then use CheQ to
+        recycle money back into your account.
 
-        Record the recycled amount here.
+        Therefore the app tracks:
+
+        CARD PAYMENT
+
+        ↓
+
+        CHEQ RECYCLING
+
+        ↓
+
+        CHEQ FEE
+
+        ↓
+
+        TRUE DEBT
         """
     )
 
 
-    card_display = cards.copy()
+    card_display = active_cards.copy()
 
 
-    card_display["balance"] = (
-        card_display["balance"]
-        .apply(money)
-    )
+    card_display[
+        "balance"
+    ] = card_display[
+        "balance"
+    ].apply(money)
 
-    card_display["min_due"] = (
-        card_display["min_due"]
-        .apply(money)
-    )
+
+    card_display[
+        "min_due"
+    ] = card_display[
+        "min_due"
+    ].apply(money)
 
 
     card_display = card_display[
@@ -1460,194 +1988,201 @@ with tabs[2]:
             "name",
             "balance",
             "min_due",
-            "due_day",
+            "due_day"
         ]
     ]
 
 
     card_display.columns = [
         "Card",
-        "Current Balance",
+        "Balance",
         "Minimum Due",
-        "Due Day",
+        "Due Day"
     ]
 
 
     st.dataframe(
         card_display,
         hide_index=True,
-        use_container_width=True,
+        use_container_width=True
     )
 
 
-    # --------------------------------------------------------
-    # RECORD CARD ROTATION
-    # --------------------------------------------------------
+    # ========================================================
+    # RECORD ROTATION
+    # ========================================================
 
     st.subheader(
-        "🔄 Record a card / CheQ rotation"
+        "🔄 Record card rotation"
     )
 
 
     card_map = dict(
         zip(
-            cards["name"],
-            cards["id"],
+            active_cards["name"],
+            active_cards["id"]
         )
     )
 
 
-    with st.form("card_cycle_form"):
+    if card_map:
 
-        card_name = st.selectbox(
-            "Card",
-            list(card_map.keys()),
-        )
+        with st.form(
+            "card_rotation"
+        ):
 
-
-        bill_paid = st.number_input(
-            "Card bill paid",
-            min_value=0.0,
-            step=1000.0,
-        )
-
-
-        recycled_amount = st.number_input(
-            "Amount received back through CheQ",
-            min_value=0.0,
-            step=1000.0,
-        )
-
-
-        convenience_fee = st.number_input(
-            "CheQ convenience fee",
-            min_value=0.0,
-            value=float(
-                settings["cheq_fee_per_card"]
-            ),
-            step=100.0,
-        )
-
-
-        new_card_spend = st.number_input(
-            "New card spending after payment",
-            min_value=0.0,
-            step=500.0,
-        )
-
-
-        card_note = st.text_input(
-            "Note"
-        )
-
-
-        record_cycle = st.form_submit_button(
-            "Record card cycle",
-            use_container_width=True,
-        )
-
-
-    if record_cycle:
-
-        conn = db()
-
-        card_id = card_map[
-            card_name
-        ]
-
-
-        conn.execute(
-            """
-            INSERT INTO card_cycles
-            (
-                card_id,
-                cycle_date,
-                paid_amount,
-                recycled_amount,
-                cheq_fee,
-                note
-            )
-            VALUES (?,?,?,?,?,?)
-            """,
-            (
-                card_id,
-                str(today),
-                bill_paid,
-                recycled_amount,
-                convenience_fee,
-                card_note,
-            ),
-        )
-
-
-        # Approximate card balance update
-        conn.execute(
-            """
-            UPDATE cards
-
-            SET balance =
-                MAX(
-                    0,
-                    balance
-                    - ?
-                    + ?
+            card = st.selectbox(
+                "Card",
+                list(
+                    card_map.keys()
                 )
-
-            WHERE id = ?
-            """,
-            (
-                bill_paid,
-                new_card_spend,
-                card_id,
-            ),
-        )
+            )
 
 
-        conn.commit()
-        conn.close()
+            bill = st.number_input(
+                "Card bill paid",
+                min_value=0.0,
+                step=1000.0
+            )
 
 
-        st.success(
-            "Card cycle recorded."
-        )
+            recycled = st.number_input(
+                "Amount received through CheQ",
+                min_value=0.0,
+                step=1000.0
+            )
 
-        st.rerun()
+
+            fee = st.number_input(
+                "CheQ fee",
+                min_value=0.0,
+                value=float(
+                    settings[
+                        "cheq_fee_per_card"
+                    ]
+                ),
+                step=100.0
+            )
 
 
-    # --------------------------------------------------------
-    # CHEQ INSIGHT
-    # --------------------------------------------------------
+            new_spend = st.number_input(
+                "New card spending",
+                min_value=0.0,
+                step=500.0
+            )
+
+
+            note = st.text_input(
+                "Note"
+            )
+
+
+            submit_cycle = st.form_submit_button(
+                "Record rotation"
+            )
+
+
+        if submit_cycle:
+
+            conn = db()
+
+
+            card_id = card_map[
+                card
+            ]
+
+
+            conn.execute(
+                """
+                INSERT INTO card_cycles
+                (
+                    card_id,
+                    cycle_date,
+                    paid_amount,
+                    recycled_amount,
+                    cheq_fee,
+                    note
+                )
+                VALUES (?,?,?,?,?,?)
+                """,
+                (
+                    card_id,
+                    str(today),
+                    bill,
+                    recycled,
+                    fee,
+                    note
+                )
+            )
+
+
+            # Approximate balance
+            conn.execute(
+                """
+                UPDATE cards
+
+                SET balance =
+                    MAX(
+                        0,
+                        balance
+                        - ?
+                        + ?
+                    )
+
+                WHERE id = ?
+                """,
+                (
+                    bill,
+                    new_spend,
+                    card_id
+                )
+            )
+
+
+            conn.commit()
+
+            conn.close()
+
+
+            st.success(
+                "Card rotation recorded."
+            )
+
+
+            st.rerun()
+
 
     cycles = card_cycles_df()
 
 
     if not cycles.empty:
 
-        total_recycled = (
-            cycles[
-                "recycled_amount"
-            ].sum()
-        )
-
-        total_cheq_fees = (
+        total_fees = float(
             cycles[
                 "cheq_fee"
             ].sum()
         )
 
 
-        col1, col2 = st.columns(2)
-
-
-        col1.metric(
-            "Recorded CheQ Recycling",
-            money(total_recycled),
+        total_recycled = float(
+            cycles[
+                "recycled_amount"
+            ].sum()
         )
 
 
-        col2.metric(
-            "Recorded CheQ Fees",
-            money(total_cheq_fees),
+        c1, c2 = st.columns(2)
+
+
+        c1.metric(
+            "CheQ Fees Paid",
+            money(total_fees)
+        )
+
+
+        c2.metric(
+            "Money Recycled",
+            money(total_recycled)
         )
 
 
@@ -1656,42 +2191,42 @@ with tabs[2]:
         )
 
 
-        display_cycles = cycles.copy()
+        history = cycles.copy()
 
 
         for col in [
             "paid_amount",
             "recycled_amount",
-            "cheq_fee",
+            "cheq_fee"
         ]:
 
-            display_cycles[col] = (
-                display_cycles[col]
+            history[col] = (
+                history[col]
                 .apply(money)
             )
 
 
         st.dataframe(
-            display_cycles,
+            history,
             hide_index=True,
-            use_container_width=True,
+            use_container_width=True
         )
 
 
 # ============================================================
+# TAB 5
 # EXPENSES
 # ============================================================
 
-with tabs[3]:
+with tabs[4]:
 
     st.header(
-        "💸 Real-Time Expense Management"
+        "💸 Expense Manager"
     )
 
 
     st.caption(
-        "Enter expenses as they happen. "
-        "The app will show where your money is actually going."
+        "Record expenses as they actually happen."
     )
 
 
@@ -1719,29 +2254,31 @@ with tabs[3]:
 
         "Entertainment",
 
-        "Other",
+        "Other"
 
     ]
 
 
-    with st.form("expense_form"):
+    with st.form(
+        "expense"
+    ):
 
         expense_date = st.date_input(
             "Date",
-            today,
+            today
         )
 
 
         category = st.selectbox(
             "Category",
-            categories,
+            categories
         )
 
 
-        expense_amount = st.number_input(
+        amount = st.number_input(
             "Amount",
             min_value=0.0,
-            step=100.0,
+            step=100.0
         )
 
 
@@ -1751,14 +2288,13 @@ with tabs[3]:
 
 
         add_expense = st.form_submit_button(
-            "Add expense",
-            use_container_width=True,
+            "Add expense"
         )
 
 
     if add_expense:
 
-        if expense_amount > 0:
+        if amount > 0:
 
             conn = db()
 
@@ -1778,19 +2314,20 @@ with tabs[3]:
                 (
                     str(expense_date),
                     category,
-                    expense_amount,
+                    amount,
                     "expense",
-                    description,
-                ),
+                    description
+                )
             )
 
 
             conn.commit()
+
             conn.close()
 
 
             st.success(
-                "Expense added."
+                "Expense recorded."
             )
 
 
@@ -1805,19 +2342,27 @@ with tabs[3]:
         expenses[
             "txn_date"
         ] = pd.to_datetime(
-            expenses["txn_date"]
+            expenses[
+                "txn_date"
+            ]
         )
 
 
         current_month = expenses[
             (
-                expenses["txn_date"].dt.year
-                == today.year
+                expenses[
+                    "txn_date"
+                ].dt.month
+                ==
+                today.month
             )
             &
             (
-                expenses["txn_date"].dt.month
-                == today.month
+                expenses[
+                    "txn_date"
+                ].dt.year
+                ==
+                today.year
             )
         ]
 
@@ -1825,48 +2370,46 @@ with tabs[3]:
         if not current_month.empty:
 
             st.subheader(
-                "📊 Spending this month"
+                "📊 This month's actual spending"
             )
 
 
-            category_totals = (
+            spending = (
                 current_month
-                .groupby("category")[
+                .groupby(
+                    "category"
+                )[
                     "amount"
                 ]
                 .sum()
                 .sort_values(
                     ascending=False
                 )
+            )
+
+
+            display_spending = (
+                spending
                 .reset_index()
             )
 
 
-            category_totals["amount"] = (
-                category_totals["amount"]
-                .apply(money)
-            )
+            display_spending[
+                "amount"
+            ] = display_spending[
+                "amount"
+            ].apply(money)
 
 
             st.dataframe(
-                category_totals,
+                display_spending,
                 hide_index=True,
-                use_container_width=True,
-            )
-
-
-            # Numeric chart data
-            chart_data = (
-                current_month
-                .groupby("category")[
-                    "amount"
-                ]
-                .sum()
+                use_container_width=True
             )
 
 
             st.bar_chart(
-                chart_data
+                spending
             )
 
 
@@ -1875,246 +2418,230 @@ with tabs[3]:
         )
 
 
-        recent_expenses = expenses.head(30).copy()
+        recent = expenses.head(
+            30
+        ).copy()
 
 
-        recent_expenses["amount"] = (
-            recent_expenses["amount"]
-            .apply(money)
-        )
+        recent[
+            "amount"
+        ] = recent[
+            "amount"
+        ].apply(money)
 
 
         st.dataframe(
-            recent_expenses,
+            recent,
             hide_index=True,
-            use_container_width=True,
+            use_container_width=True
         )
 
 
 # ============================================================
+# TAB 6
 # FORECAST
 # ============================================================
 
-with tabs[4]:
+with tabs[5]:
 
     st.header(
         "📈 Debt Escape Forecast"
     )
 
 
-    st.caption(
-        "This is a planning model using the EMI durations you entered. "
-        "Actual lender balances can differ."
+    max_months = max(
+        36,
+        int(
+            active_loans[
+                "pending_months"
+            ].max()
+        )
+        if not active_loans.empty
+        else 36
     )
 
 
-    if not active_loans.empty:
+    forecast_rows = []
 
-        max_months = max(
-            36,
-            int(
+
+    for month in range(
+        1,
+        max_months + 1
+    ):
+
+        emi = float(
+            active_loans.loc[
                 active_loans[
                     "pending_months"
-                ].max()
-            )
-            + 3,
+                ] >= month,
+                "emi"
+            ].sum()
         )
 
 
-        forecast_rows = []
-
-
-        for month in range(
-            1,
-            max_months + 1,
-        ):
-
-            emi_remaining = float(
-                active_loans.loc[
-                    active_loans[
-                        "pending_months"
-                    ]
-                    >= month,
-                    "emi",
-                ].sum()
-            )
-
-
-            emi_freed = (
-                monthly_emi
-                -
-                emi_remaining
-            )
-
-
-            cash_flow_gap = (
-                emi_remaining
-                +
-                living_expenses
-                -
-                settings["salary"]
-            )
-
-
-            forecast_rows.append(
-                [
-                    month,
-                    emi_remaining,
-                    emi_freed,
-                    cash_flow_gap,
-                ]
-            )
-
-
-        forecast = pd.DataFrame(
-            forecast_rows,
-            columns=[
-                "Month",
-                "Scheduled EMIs",
-                "EMI Freed",
-                "Cash Flow Gap",
-            ],
+        cash_flow = (
+            salary
+            -
+            living_cost
+            -
+            emi
         )
 
 
-        # ----------------------------------------------------
-        # CHART
-        # ----------------------------------------------------
-
-        chart = forecast.set_index(
-            "Month"
-        )[
-            [
-                "Scheduled EMIs",
-                "EMI Freed",
-            ]
-        ]
-
-
-        st.line_chart(
-            chart
+        freed = (
+            monthly_emi
+            -
+            emi
         )
 
 
-        # ----------------------------------------------------
-        # TABLE
-        # ----------------------------------------------------
+        forecast_rows.append(
+            {
+                "Month": month,
 
-        display_forecast = forecast.head(
-            24
-        ).copy()
+                "EMI": emi,
 
+                "Cash Flow": cash_flow,
 
-        for col in [
-            "Scheduled EMIs",
-            "EMI Freed",
-            "Cash Flow Gap",
-        ]:
-
-            display_forecast[col] = (
-                display_forecast[col]
-                .apply(money)
-            )
-
-
-        st.dataframe(
-            display_forecast,
-            hide_index=True,
-            use_container_width=True,
+                "EMI Freed": freed
+            }
         )
+
+
+    forecast = pd.DataFrame(
+        forecast_rows
+    )
 
 
     # --------------------------------------------------------
-    # LOAN MILESTONES
+    # CHART
+    # --------------------------------------------------------
+
+    chart_data = forecast.set_index(
+        "Month"
+    )[
+        [
+            "EMI",
+            "Cash Flow"
+        ]
+    ]
+
+
+    st.line_chart(
+        chart_data
+    )
+
+
+    # --------------------------------------------------------
+    # TABLE
+    # --------------------------------------------------------
+
+    table = forecast.head(
+        24
+    ).copy()
+
+
+    table[
+        "EMI"
+    ] = table[
+        "EMI"
+    ].apply(money)
+
+
+    table[
+        "Cash Flow"
+    ] = table[
+        "Cash Flow"
+    ].apply(money)
+
+
+    table[
+        "EMI Freed"
+    ] = table[
+        "EMI Freed"
+    ].apply(money)
+
+
+    st.dataframe(
+        table,
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+    # --------------------------------------------------------
+    # MILESTONES
     # --------------------------------------------------------
 
     st.subheader(
-        "🎯 Loans that finish first"
+        "🎯 EMI milestones"
     )
 
 
     milestones = active_loans.sort_values(
         "pending_months"
-    )[
-        [
-            "name",
-            "emi",
-            "pending_months",
-        ]
-    ].copy()
+    ).copy()
 
 
     milestones[
-        "EMI Freed"
-    ] = milestones["emi"].apply(
-        money
-    )
-
-
-    milestones[
-        "emi"
+        "Monthly EMI"
     ] = milestones[
         "emi"
-    ].apply(
-        money
-    )
+    ].apply(money)
+
+
+    milestones[
+        "Monthly Cash Freed"
+    ] = milestones[
+        "emi"
+    ].apply(money)
+
+
+    milestones = milestones[
+        [
+            "name",
+            "Monthly EMI",
+            "pending_months",
+            "Monthly Cash Freed"
+        ]
+    ]
 
 
     milestones.columns = [
         "Loan",
-        "Monthly EMI",
+        "EMI",
         "Months Left",
-        "Monthly Cash Freed",
+        "Cash Freed When Closed"
     ]
 
 
     st.dataframe(
         milestones,
         hide_index=True,
-        use_container_width=True,
-    )
-
-
-    st.success(
-        """
-        The key strategy is simple:
-
-        **Loan finishes → EMI disappears → immediately redirect
-        that EMI toward your revolving debt.**
-
-        Do not allow the freed EMI to become lifestyle spending.
-        """
+        use_container_width=True
     )
 
 
 # ============================================================
+# TAB 7
 # DATA
 # ============================================================
 
-with tabs[5]:
+with tabs[6]:
 
     st.header(
-        "⚙️ Data"
+        "⚙️ Data & Backup"
     )
 
 
     st.info(
         """
-        Your data is stored locally in:
+        Your history is stored in the local SQLite file:
 
-        `debt_manager.db`
+        debt_manager.db
 
-        Keep this file if you want to preserve your history.
+        Do not delete this file unless you want to reset your history.
         """
-    )
-
-
-    # --------------------------------------------------------
-    # DOWNLOAD DATA
-    # --------------------------------------------------------
-
-    st.subheader(
-        "Download your data"
     )
 
 
@@ -2124,7 +2651,7 @@ with tabs[5]:
             index=False
         ).encode("utf-8"),
         "loans.csv",
-        "text/csv",
+        "text/csv"
     )
 
 
@@ -2134,7 +2661,7 @@ with tabs[5]:
             index=False
         ).encode("utf-8"),
         "cards.csv",
-        "text/csv",
+        "text/csv"
     )
 
 
@@ -2146,30 +2673,21 @@ with tabs[5]:
         )
         .encode("utf-8"),
         "expenses.csv",
-        "text/csv",
+        "text/csv"
     )
 
-
-    # --------------------------------------------------------
-    # RESET
-    # --------------------------------------------------------
 
     st.divider()
 
 
-    st.subheader(
-        "⚠️ Reset"
-    )
-
-
     st.warning(
-        "Resetting deletes your locally stored transactions and restores the original starting data."
+        "Resetting deletes your local debt history."
     )
 
 
     if st.button(
         "Reset database",
-        type="secondary",
+        type="secondary"
     ):
 
         if DB_PATH.exists():
@@ -2193,8 +2711,8 @@ st.divider()
 
 st.caption(
     """
-    Debt Manager is a budgeting and decision-support tool.
-    Always verify lender balances, interest, fees, due dates and
-    CheQ charges before making financial decisions.
+    Debt Escape Manager is a budgeting and planning tool.
+    Verify actual lender balances, interest, fees, due dates,
+    card statements and CheQ charges before making payments.
     """
 )
