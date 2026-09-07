@@ -3,9 +3,10 @@ import sqlite3
 import pandas as pd
 from datetime import date
 import calendar
+import os
 
 # ============================================================
-# PAGE
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -14,20 +15,20 @@ st.set_page_config(
     layout="wide",
 )
 
-# ============================================================
-# CONSTANTS
-# ============================================================
-
 DB_FILE = "debt_manager.db"
 
-FORECAST_START_YEAR = 2026
-FORECAST_START_MONTH = 10
+FORECAST_YEAR = 2026
+FORECAST_MONTH = 10
 
-SALARY_DEFAULT = 59000
-BONUS_DEFAULT = 60000
-CASH_DEFAULT = 40000
-FRIEND_REPAYMENT_DEFAULT = 80000
-CHEQ_FEE_DEFAULT = 2000
+# ============================================================
+# DEFAULT FINANCIAL DATA
+# ============================================================
+
+DEFAULT_SALARY = 59000
+DEFAULT_BONUS = 60000
+DEFAULT_CASH = 40000
+DEFAULT_FRIEND_REPAYMENT = 80000
+DEFAULT_CHEQ_FEE = 2000
 
 LIVING_EXPENSES = {
     "Rent": 15000,
@@ -39,57 +40,56 @@ LIVING_EXPENSES = {
 }
 
 DEFAULT_LOANS = [
-    ["Fibe", 9890, 6, 4, "₹9,890 EMI"],
-    ["Stashfin", 4199, 11, 2, "Rotatable only if needed"],
-    ["Kredibee", 9219, 5, 2, ""],
-    ["Branch", 2488, 4, 28, ""],
-    ["Money View", 3764, 5, 3, ""],
-    ["Poonawala Fincorp", 6507, 21, 5, ""],
-    ["Instamoney", 5616, 2, 1, "Rotatable only if needed"],
-    ["Kissht", 1583, 8, 7, ""],
-    ["Loan Tap", 5276, 1, 1, ""],
-    ["Flexipay", 6000, 23, 26, ""],
+    ("Fibe", 9890, 6, 4, ""),
+    ("Stashfin", 4199, 11, 2, "Rotatable only if needed"),
+    ("Kredibee", 9219, 5, 2, ""),
+    ("Branch", 2488, 4, 28, ""),
+    ("Money View", 3764, 5, 3, ""),
+    ("Poonawala Fincorp", 6507, 21, 5, ""),
+    ("Instamoney", 5616, 2, 1, "Rotatable only if needed"),
+    ("Kissht", 1583, 8, 7, ""),
+    ("Loan Tap", 5276, 1, 1, ""),
+    ("Flexipay", 6000, 23, 26, ""),
 ]
 
 DEFAULT_CARDS = [
-    ["Axis", 60000, 0, ""],
-    ["HDFC", 29656, 1816, "2026-08-28"],
-    ["DBS", 36000, 1089.79, "2026-09-01"],
+    ("Axis", 60000, 0, ""),
+    ("HDFC", 29656, 1816, "2026-08-28"),
+    ("DBS", 36000, 1089.79, "2026-09-01"),
 ]
 
+
 # ============================================================
-# HELPERS
+# FORMATTING
 # ============================================================
 
-def money(x):
+def money(value):
     try:
-        x = float(x or 0)
+        value = float(value or 0)
     except (TypeError, ValueError):
-        x = 0.0
+        value = 0.0
 
-    sign = "-" if x < 0 else ""
-    x = abs(x)
+    sign = "-" if value < 0 else ""
+    value = abs(value)
 
-    return f"{sign}₹{x:,.0f}"
+    return f"{sign}₹{value:,.0f}"
 
 
-def money2(x):
+def money2(value):
     try:
-        x = float(x or 0)
+        value = float(value or 0)
     except (TypeError, ValueError):
-        x = 0.0
+        value = 0.0
 
-    return f"₹{x:,.2f}"
-
-
-def add_months(year, month, number):
-    total = year * 12 + (month - 1) + number
-    new_year = total // 12
-    new_month = total % 12 + 1
-    return new_year, new_month
+    return f"₹{value:,.2f}"
 
 
-def month_name(year, month):
+def add_months(year, month, n):
+    total = year * 12 + month - 1 + n
+    return total // 12, total % 12 + 1
+
+
+def month_label(year, month):
     return f"{calendar.month_name[month]} {year}"
 
 
@@ -97,13 +97,58 @@ def month_name(year, month):
 # DATABASE
 # ============================================================
 
-def db():
-    return sqlite3.connect(DB_FILE, check_same_thread=False)
+def get_db():
+    return sqlite3.connect(
+        DB_FILE,
+        check_same_thread=False
+    )
 
 
-def initialize_database():
-    conn = db()
+def table_exists(conn, table_name):
     cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type='table'
+        AND name=?
+        """,
+        (table_name,)
+    )
+
+    return cur.fetchone() is not None
+
+
+def get_columns(conn, table_name):
+    cur = conn.cursor()
+
+    try:
+        cur.execute(
+            f"PRAGMA table_info({table_name})"
+        )
+
+        return [
+            row[1]
+            for row in cur.fetchall()
+        ]
+
+    except Exception:
+        return []
+
+
+# ============================================================
+# DATABASE SETUP / MIGRATION
+# ============================================================
+
+def setup_database():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # --------------------------------------------------------
+    # SETTINGS
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
@@ -112,35 +157,85 @@ def initialize_database():
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS loans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            emi REAL NOT NULL,
-            months_left INTEGER NOT NULL,
-            emi_date INTEGER,
-            notes TEXT
-        )
-    """)
+    # --------------------------------------------------------
+    # LOANS
+    # --------------------------------------------------------
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS cards (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            balance REAL NOT NULL,
-            minimum_due REAL DEFAULT 0,
-            due_date TEXT
-        )
-    """)
+    if not table_exists(conn, "loans"):
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT,
-            amount REAL,
-            expense_date TEXT
-        )
-    """)
+        cur.execute("""
+            CREATE TABLE loans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                emi REAL,
+                months_left INTEGER,
+                emi_date INTEGER,
+                notes TEXT
+            )
+        """)
+
+    else:
+
+        columns = get_columns(conn, "loans")
+
+        if "months_left" not in columns:
+
+            cur.execute("""
+                ALTER TABLE loans
+                ADD COLUMN months_left INTEGER DEFAULT 0
+            """)
+
+        if "emi_date" not in columns:
+
+            cur.execute("""
+                ALTER TABLE loans
+                ADD COLUMN emi_date INTEGER DEFAULT 1
+            """)
+
+        if "notes" not in columns:
+
+            cur.execute("""
+                ALTER TABLE loans
+                ADD COLUMN notes TEXT DEFAULT ''
+            """)
+
+    # --------------------------------------------------------
+    # CARDS
+    # --------------------------------------------------------
+
+    if not table_exists(conn, "cards"):
+
+        cur.execute("""
+            CREATE TABLE cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                balance REAL,
+                minimum_due REAL,
+                due_date TEXT
+            )
+        """)
+
+    else:
+
+        columns = get_columns(conn, "cards")
+
+        if "minimum_due" not in columns:
+
+            cur.execute("""
+                ALTER TABLE cards
+                ADD COLUMN minimum_due REAL DEFAULT 0
+            """)
+
+        if "due_date" not in columns:
+
+            cur.execute("""
+                ALTER TABLE cards
+                ADD COLUMN due_date TEXT DEFAULT ''
+            """)
+
+    # --------------------------------------------------------
+    # PAYMENTS
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS payments (
@@ -151,6 +246,10 @@ def initialize_database():
             note TEXT
         )
     """)
+
+    # --------------------------------------------------------
+    # FORECLOSURES
+    # --------------------------------------------------------
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS foreclosures (
@@ -163,6 +262,10 @@ def initialize_database():
         )
     """)
 
+    # --------------------------------------------------------
+    # CARD ROTATIONS
+    # --------------------------------------------------------
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS card_rotations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,19 +276,75 @@ def initialize_database():
         )
     """)
 
+    # --------------------------------------------------------
+    # EXPENSES
+    # --------------------------------------------------------
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            amount REAL,
+            expense_date TEXT
+        )
+    """)
+
+    conn.commit()
+
+    # --------------------------------------------------------
+    # INSERT DEFAULT LOANS ONLY IF MISSING
+    # --------------------------------------------------------
+
+    cur.execute(
+        "SELECT COUNT(*) FROM loans"
+    )
+
+    loan_count = cur.fetchone()[0]
+
+    if loan_count == 0:
+
+        for loan in DEFAULT_LOANS:
+
+            cur.execute("""
+                INSERT INTO loans
+                (name, emi, months_left, emi_date, notes)
+                VALUES (?, ?, ?, ?, ?)
+            """, loan)
+
+    # --------------------------------------------------------
+    # INSERT DEFAULT CARDS ONLY IF MISSING
+    # --------------------------------------------------------
+
+    cur.execute(
+        "SELECT COUNT(*) FROM cards"
+    )
+
+    card_count = cur.fetchone()[0]
+
+    if card_count == 0:
+
+        for card in DEFAULT_CARDS:
+
+            cur.execute("""
+                INSERT INTO cards
+                (name, balance, minimum_due, due_date)
+                VALUES (?, ?, ?, ?)
+            """, card)
+
     conn.commit()
     conn.close()
 
 
-initialize_database()
+setup_database()
 
 
 # ============================================================
-# SETTINGS
+# SETTINGS FUNCTIONS
 # ============================================================
 
 def get_setting(key, default):
-    conn = db()
+
+    conn = get_db()
     cur = conn.cursor()
 
     cur.execute(
@@ -194,6 +353,7 @@ def get_setting(key, default):
     )
 
     row = cur.fetchone()
+
     conn.close()
 
     if row is None:
@@ -206,7 +366,8 @@ def get_setting(key, default):
 
 
 def save_setting(key, value):
-    conn = db()
+
+    conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
@@ -214,147 +375,109 @@ def save_setting(key, value):
         VALUES (?, ?)
         ON CONFLICT(key)
         DO UPDATE SET value=excluded.value
-    """, (key, str(value)))
+    """, (
+        key,
+        str(value)
+    ))
 
     conn.commit()
     conn.close()
 
 
 # ============================================================
-# SEED
-# ============================================================
-
-def seed_database():
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) FROM loans")
-    loan_count = cur.fetchone()[0]
-
-    if loan_count == 0:
-        for loan in DEFAULT_LOANS:
-            cur.execute("""
-                INSERT INTO loans
-                (name, emi, months_left, emi_date, notes)
-                VALUES (?, ?, ?, ?, ?)
-            """, loan)
-
-    cur.execute("SELECT COUNT(*) FROM cards")
-    card_count = cur.fetchone()[0]
-
-    if card_count == 0:
-        for card in DEFAULT_CARDS:
-            cur.execute("""
-                INSERT INTO cards
-                (name, balance, minimum_due, due_date)
-                VALUES (?, ?, ?, ?)
-            """, card)
-
-    conn.commit()
-    conn.close()
-
-    defaults = {
-        "salary": SALARY_DEFAULT,
-        "bonus": BONUS_DEFAULT,
-        "cash": CASH_DEFAULT,
-        "friend_repayment": FRIEND_REPAYMENT_DEFAULT,
-        "cheq_fee": CHEQ_FEE_DEFAULT,
-    }
-
-    for key, value in defaults.items():
-        if get_setting(key, None) is None:
-            save_setting(key, value)
-
-
-seed_database()
-
-
-# ============================================================
-# LOAD DATA
+# LOADERS
 # ============================================================
 
 def load_loans():
-    conn = db()
+
+    conn = get_db()
 
     df = pd.read_sql_query(
         """
-        SELECT *
+        SELECT
+            id,
+            name,
+            emi,
+            months_left,
+            emi_date,
+            notes
         FROM loans
-        ORDER BY name
+        ORDER BY id
         """,
         conn
     )
 
     conn.close()
+
     return df
 
 
 def load_cards():
-    conn = db()
+
+    conn = get_db()
 
     df = pd.read_sql_query(
         """
-        SELECT *
+        SELECT
+            id,
+            name,
+            balance,
+            minimum_due,
+            due_date
         FROM cards
-        ORDER BY name
+        ORDER BY id
         """,
         conn
     )
 
     conn.close()
-    return df
 
-
-def load_payments():
-    conn = db()
-
-    df = pd.read_sql_query(
-        """
-        SELECT *
-        FROM payments
-        ORDER BY payment_date DESC
-        """,
-        conn
-    )
-
-    conn.close()
     return df
 
 
 def load_foreclosures():
-    conn = db()
 
+    conn = get_db()
+
+    # IMPORTANT:
+    # This query only uses tables guaranteed by setup_database().
     df = pd.read_sql_query(
         """
         SELECT
             f.id,
             f.loan_id,
-            l.name AS loan_name,
-            l.emi,
-            l.months_left,
             f.quote_date,
             f.foreclosure_amount,
             f.valid_until,
-            f.note
+            f.note,
+            l.name AS loan_name,
+            l.emi,
+            l.months_left
         FROM foreclosures f
-        JOIN loans l
-        ON l.id = f.loan_id
+        LEFT JOIN loans l
+        ON f.loan_id = l.id
         ORDER BY f.quote_date DESC
         """,
         conn
     )
 
     conn.close()
+
     return df
 
 
 def load_rotations():
-    conn = db()
+
+    conn = get_db()
 
     df = pd.read_sql_query(
         """
-        SELECT *
+        SELECT
+            id,
+            card_name,
+            rotation_date,
+            amount,
+            fee
         FROM card_rotations
         ORDER BY rotation_date DESC
         """,
@@ -362,52 +485,77 @@ def load_rotations():
     )
 
     conn.close()
+
     return df
 
 
 # ============================================================
-# CURRENT VALUES
+# LOAD CURRENT DATA
 # ============================================================
 
-salary = float(get_setting("salary", SALARY_DEFAULT))
-bonus = float(get_setting("bonus", BONUS_DEFAULT))
-cash = float(get_setting("cash", CASH_DEFAULT))
+salary = float(
+    get_setting(
+        "salary",
+        DEFAULT_SALARY
+    )
+)
+
+bonus = float(
+    get_setting(
+        "bonus",
+        DEFAULT_BONUS
+    )
+)
+
+cash = float(
+    get_setting(
+        "cash",
+        DEFAULT_CASH
+    )
+)
+
 friend_repayment = float(
     get_setting(
         "friend_repayment",
-        FRIEND_REPAYMENT_DEFAULT
+        DEFAULT_FRIEND_REPAYMENT
     )
 )
-cheq_fee = float(get_setting("cheq_fee", CHEQ_FEE_DEFAULT))
+
+cheq_fee = float(
+    get_setting(
+        "cheq_fee",
+        DEFAULT_CHEQ_FEE
+    )
+)
 
 loans = load_loans()
 cards = load_cards()
-payments = load_payments()
 foreclosures = load_foreclosures()
 rotations = load_rotations()
 
-living_total = sum(LIVING_EXPENSES.values())
+living_total = sum(
+    LIVING_EXPENSES.values()
+)
 
 
 # ============================================================
-# FORECAST ENGINE
+# FORECAST
 # ============================================================
 
-def build_forecast(number_of_months=24):
+def make_forecast(months=24):
 
     rows = []
 
-    for i in range(number_of_months):
+    for i in range(months):
 
         year, month = add_months(
-            FORECAST_START_YEAR,
-            FORECAST_START_MONTH,
+            FORECAST_YEAR,
+            FORECAST_MONTH,
             i
         )
 
         emi_total = 0
         active_loans = 0
-        details = []
 
         for _, loan in loans.iterrows():
 
@@ -418,37 +566,34 @@ def build_forecast(number_of_months=24):
 
             if remaining > 0:
 
-                emi_total += float(loan["emi"])
+                emi_total += float(
+                    loan["emi"]
+                )
+
                 active_loans += 1
 
-                details.append({
-                    "name": loan["name"],
-                    "emi": float(loan["emi"]),
-                    "months_left": remaining,
-                })
-
-        monthly_cash_flow = (
+        cash_flow = (
             salary
             - living_total
             - emi_total
         )
 
         rows.append({
-            "year": year,
-            "month": month,
-            "label": month_name(year, month),
+            "month": month_label(
+                year,
+                month
+            ),
             "salary": salary,
             "living": living_total,
             "emi": emi_total,
-            "cash_flow": monthly_cash_flow,
-            "active_loans": active_loans,
-            "details": details,
+            "cash_flow": cash_flow,
+            "active_loans": active_loans
         })
 
     return pd.DataFrame(rows)
 
 
-forecast = build_forecast()
+forecast = make_forecast()
 
 
 # ============================================================
@@ -458,13 +603,13 @@ forecast = build_forecast()
 st.title("💰 Debt Command Center")
 
 st.caption(
-    "Your goal: survive the EMI bridge, stop new borrowing, "
-    "then aggressively eliminate revolving debt."
+    "A decision system for managing the EMI shortage "
+    "without automatically taking another loan."
 )
 
 st.info(
-    "📅 Starting point: 26 September 2026. "
-    "September EMIs are already paid. Forecast begins October 2026."
+    "📅 Forecast starts from 26 September 2026. "
+    "September EMIs are already treated as paid."
 )
 
 
@@ -474,7 +619,7 @@ st.info(
 
 with st.sidebar:
 
-    st.header("Current Situation")
+    st.header("💰 Snapshot")
 
     st.metric(
         "Salary",
@@ -486,35 +631,50 @@ with st.sidebar:
         money(living_total)
     )
 
+    total_emi = (
+        loans["emi"].sum()
+        if not loans.empty
+        else 0
+    )
+
     st.metric(
-        "Current EMI",
-        money(
-            loans["emi"].sum()
-            if not loans.empty else 0
-        )
+        "EMIs",
+        money(total_emi)
+    )
+
+    monthly_flow = (
+        salary
+        - living_total
+        - total_emi
+    )
+
+    st.metric(
+        "Monthly Cash Flow",
+        money(monthly_flow)
     )
 
     st.divider()
 
-    st.write("**Forecast starts:**")
-    st.write("26 Sep 2026")
+    st.caption(
+        "Start: 26 Sep 2026"
+    )
 
-    st.write("**First forecast:**")
-    st.write("October 2026")
+    st.caption(
+        "Forecast: October 2026 onward"
+    )
 
 
 # ============================================================
 # TABS
 # ============================================================
 
-tab_command, tab_forecast, tab_loans, tab_cards, tab_expenses, tab_settings = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
-        "🚨 Command Center",
-        "📊 Forecast",
-        "🏦 Loans",
-        "💳 Cards + CheQ",
-        "💸 Expenses",
-        "⚙️ Settings",
+        "🚨 COMMAND CENTER",
+        "📊 FORECAST",
+        "🏦 LOANS",
+        "💳 CARDS + CHEQ",
+        "⚙️ SETTINGS",
     ]
 )
 
@@ -523,7 +683,7 @@ tab_command, tab_forecast, tab_loans, tab_cards, tab_expenses, tab_settings = st
 # COMMAND CENTER
 # ============================================================
 
-with tab_command:
+with tab1:
 
     st.header("🚨 NO NEW LOAN PLAN")
 
@@ -537,88 +697,107 @@ with tab_command:
         - friend_repayment
     )
 
-    col1, col2, col3, col4 = st.columns(4)
+    a, b, c, d = st.columns(4)
 
-    with col1:
+    with a:
         st.metric(
             "Current Cash",
             money(cash)
         )
 
-    with col2:
+    with b:
         st.metric(
             "Bonus",
             money(bonus)
         )
 
-    with col3:
+    with c:
         st.metric(
             "Friend Repayment",
             money(friend_repayment)
         )
 
-    with col4:
+    with d:
         st.metric(
             "Cash After Friend",
             money(cash_after_friend)
         )
 
+    if cash_after_friend >= 0:
+
+        st.success(
+            f"After paying your friend, "
+            f"you have approximately "
+            f"**{money(cash_after_friend)}**."
+        )
+
+    else:
+
+        st.error(
+            "Your cash is insufficient even before the EMI bridge."
+        )
+
     # --------------------------------------------------------
-    # CURRENT MONTHLY POSITION
+    # CURRENT POSITION
     # --------------------------------------------------------
+
+    st.subheader("1️⃣ Monthly Reality")
 
     current_emi = (
         loans["emi"].sum()
-        if not loans.empty else 0
+        if not loans.empty
+        else 0
     )
 
-    current_cash_flow = (
+    current_flow = (
         salary
         - living_total
         - current_emi
     )
 
-    st.subheader("1️⃣ Monthly reality")
+    x, y, z = st.columns(3)
 
-    a, b, c, d = st.columns(4)
-
-    with a:
-        st.metric("Salary", money(salary))
-
-    with b:
-        st.metric("Living", money(living_total))
-
-    with c:
-        st.metric("EMIs", money(current_emi))
-
-    with d:
+    with x:
         st.metric(
-            "Monthly Cash Flow",
-            money(current_cash_flow)
+            "Salary",
+            money(salary)
         )
 
-    if current_cash_flow < 0:
+    with y:
+        st.metric(
+            "Living",
+            money(living_total)
+        )
+
+    with z:
+        st.metric(
+            "EMIs",
+            money(current_emi)
+        )
+
+    if current_flow < 0:
 
         st.error(
-            f"🚨 You are structurally short by "
-            f"**{money(abs(current_cash_flow))} per month**."
+            f"Current monthly shortage: "
+            f"**{money(abs(current_flow))}**."
         )
 
     else:
 
         st.success(
-            f"Monthly surplus: **{money(current_cash_flow)}**"
+            f"Current monthly surplus: "
+            f"**{money(current_flow)}**."
         )
 
     # --------------------------------------------------------
-    # BRIDGE ANALYSIS
+    # BRIDGE CALCULATION
     # --------------------------------------------------------
 
-    st.subheader("2️⃣ How much do you need to survive the bridge?")
+    st.subheader("2️⃣ EMI Bridge")
 
     cumulative = 0
-    worst_point = 0
-    worst_month = None
+    lowest = 0
+    lowest_month = None
 
     bridge_rows = []
 
@@ -626,49 +805,53 @@ with tab_command:
 
         cumulative += row["cash_flow"]
 
-        if cumulative < worst_point:
-            worst_point = cumulative
-            worst_month = row["label"]
+        if cumulative < lowest:
+
+            lowest = cumulative
+            lowest_month = row["month"]
 
         bridge_rows.append({
-            "Month": row["label"],
-            "EMI": row["emi"],
+            "Month": row["month"],
+            "EMIs": row["emi"],
             "Monthly Cash Flow": row["cash_flow"],
-            "Cumulative Cash Flow": cumulative,
+            "Cumulative Cash Flow": cumulative
         })
 
-    bridge_df = pd.DataFrame(bridge_rows)
+    bridge_need = abs(
+        min(
+            0,
+            lowest
+        )
+    )
 
-    required_bridge = abs(min(0, worst_point))
-
-    if required_bridge > 0:
+    if bridge_need > 0:
 
         st.warning(
-            f"Estimated maximum cash-flow gap before recovery: "
-            f"**{money(required_bridge)}**."
+            f"Maximum modeled bridge requirement: "
+            f"**{money(bridge_need)}**."
         )
 
-        if cash_after_friend >= required_bridge:
+        if cash_after_friend >= bridge_need:
 
             st.success(
-                f"Your post-friend cash of {money(cash_after_friend)} "
-                f"can cover this modeled bridge."
+                "Your current post-friend cash can cover "
+                "the modeled EMI bridge."
             )
 
         else:
 
-            gap = (
-                required_bridge
+            remaining_gap = (
+                bridge_need
                 - cash_after_friend
             )
 
             st.error(
-                f"You may still need approximately "
-                f"**{money(gap)}** of additional bridge funding."
+                f"Additional bridge required: "
+                f"**{money(remaining_gap)}**."
             )
 
     # --------------------------------------------------------
-    # FIRST POSITIVE MONTH
+    # POSITIVE MONTH
     # --------------------------------------------------------
 
     positive_month = None
@@ -677,315 +860,361 @@ with tab_command:
 
         if row["cash_flow"] >= 0:
 
-            positive_month = row["label"]
+            positive_month = row["month"]
             break
 
     if positive_month:
 
         st.success(
-            f"🎯 Monthly cash flow first becomes positive around "
+            f"🎯 Monthly cash flow becomes positive around "
             f"**{positive_month}**."
         )
 
     # --------------------------------------------------------
-    # MONTHLY TABLE
+    # TABLE
     # --------------------------------------------------------
 
-    display_bridge = bridge_df.copy()
+    bridge_display = pd.DataFrame(
+        bridge_rows
+    )
 
-    for col in [
-        "EMI",
+    for column in [
+        "EMIs",
         "Monthly Cash Flow",
-        "Cumulative Cash Flow",
+        "Cumulative Cash Flow"
     ]:
-        display_bridge[col] = display_bridge[col].apply(money)
+
+        bridge_display[column] = (
+            bridge_display[column]
+            .apply(money)
+        )
 
     st.dataframe(
-        display_bridge,
+        bridge_display,
         use_container_width=True,
         hide_index=True
     )
 
     # --------------------------------------------------------
-    # ACTION PLAN
+    # STRATEGY
     # --------------------------------------------------------
 
-    st.subheader("3️⃣ Recommended strategy")
+    st.subheader("3️⃣ Recommended Strategy")
 
-    if current_cash_flow < 0:
+    if current_flow < 0:
 
         st.markdown("""
-        **Phase 1 — October to the recovery month**
+### Phase 1 — Survive the bridge
 
-        1. Do **not** take another loan just to cover a temporary EMI gap.
-        2. Keep enough cash available for the next EMIs.
-        3. Reduce unnecessary spending before rotating additional cards.
-        4. If card rotation is unavoidable, rotate only the amount actually required.
-        5. Do not aggressively foreclose a loan if doing so destroys your bridge cash.
-        6. Get actual foreclosure quotes before deciding which EMI to close.
+**Priority order:**
+
+1. Keep enough cash for upcoming EMIs.
+2. Pay the friend loan as planned.
+3. Do not take a new long-term loan for a temporary shortage.
+4. Cut discretionary expenses wherever possible.
+5. If necessary, use the minimum required card rotation.
+6. Keep track of every CheQ fee.
+7. Only consider foreclosure if it improves monthly cash flow **without destroying your bridge cash**.
+8. Once monthly cash flow turns positive, stop unnecessary card rotation.
         """)
 
     else:
 
         st.markdown("""
-        **Phase 1 — Positive cash-flow mode**
+### Phase 2 — Attack debt
 
-        1. Stop unnecessary card rotation.
-        2. Attack the highest-cost revolving debt.
-        3. When an EMI disappears, redirect the freed EMI toward debt.
-        4. Avoid lifestyle inflation.
+1. Stop unnecessary card rotation.
+2. Attack credit-card balances.
+3. When an EMI finishes, redirect that EMI to debt.
+4. Avoid increasing lifestyle expenses.
+5. Build an emergency reserve.
         """)
 
-    # --------------------------------------------------------
-    # FORECLOSURE DECISION ENGINE
-    # --------------------------------------------------------
+    # ========================================================
+    # FORECLOSURE ENGINE
+    # ========================================================
 
     st.divider()
 
-    st.subheader("4️⃣ 🏦 Should I close an EMI early?")
+    st.subheader(
+        "4️⃣ 🏦 Foreclosure Decision Engine"
+    )
 
     st.write(
-        "Enter an **actual lender foreclosure quote**. "
-        "The app will compare how much monthly EMI you remove "
-        "against how much cash you spend."
+        "Enter the actual foreclosure quote from the lender."
+    )
+
+    st.caption(
+        "Do NOT assume EMI × remaining months is the foreclosure amount."
     )
 
     if loans.empty:
 
-        st.info("No loans available.")
+        st.info(
+            "No loans found."
+        )
 
     else:
 
-        active = loans[
+        active_loans = loans[
             loans["months_left"] > 0
         ].copy()
 
-        if not active.empty:
+        if active_loans.empty:
 
-            loan_choice = st.selectbox(
-                "Loan to evaluate",
-                active["name"].tolist()
+            st.success(
+                "No active loans."
             )
 
-            loan = active[
-                active["name"] == loan_choice
+        else:
+
+            selected_name = st.selectbox(
+                "Loan",
+                active_loans["name"].tolist()
+            )
+
+            selected = active_loans[
+                active_loans["name"]
+                == selected_name
             ].iloc[0]
 
             c1, c2, c3 = st.columns(3)
 
             with c1:
+
                 st.metric(
-                    "EMI Freed",
-                    money(loan["emi"])
+                    "EMI",
+                    money(selected["emi"])
                 )
 
             with c2:
+
                 st.metric(
                     "Months Left",
-                    int(loan["months_left"])
+                    int(selected["months_left"])
                 )
 
             with c3:
+
                 st.metric(
                     "Scheduled Remaining",
                     money(
-                        loan["emi"]
-                        * loan["months_left"]
+                        selected["emi"]
+                        * selected["months_left"]
                     )
                 )
 
-            quote = st.number_input(
+            foreclosure_quote = st.number_input(
                 "Actual foreclosure amount",
                 min_value=0.0,
                 step=1000.0,
                 value=0.0
             )
 
-            if quote > 0:
+            if foreclosure_quote > 0:
 
-                remaining_cash = (
+                cash_remaining = (
                     cash_after_friend
-                    - quote
+                    - foreclosure_quote
+                )
+
+                emi_saved = float(
+                    selected["emi"]
                 )
 
                 efficiency = (
-                    loan["emi"]
-                    / quote
+                    emi_saved
+                    / foreclosure_quote
+                )
+
+                improved_cash_flow = (
+                    current_flow
+                    + emi_saved
                 )
 
                 st.write(
-                    f"Cash after foreclosure: "
-                    f"**{money(remaining_cash)}**"
+                    f"Cash remaining after foreclosure: "
+                    f"**{money(cash_remaining)}**"
                 )
 
                 st.write(
-                    f"Monthly EMI reduction: "
-                    f"**{money(loan['emi'])}**"
+                    f"Monthly EMI removed: "
+                    f"**{money(emi_saved)}**"
                 )
 
                 st.write(
-                    f"Cash-flow efficiency: "
-                    f"**{efficiency:.4f} EMI/₹**"
+                    f"Monthly cash-flow improvement: "
+                    f"**{money(emi_saved)}**"
                 )
 
-                if remaining_cash < required_bridge:
+                st.write(
+                    f"Efficiency: "
+                    f"**{efficiency:.5f} EMI/₹**"
+                )
+
+                if cash_remaining < bridge_need:
 
                     st.error(
-                        "❌ Not recommended right now. "
-                        "This foreclosure would leave you with less "
-                        "cash than the modeled bridge requirement."
+                        "❌ NOT RECOMMENDED RIGHT NOW"
+                    )
+
+                    st.write(
+                        "This foreclosure would leave you with "
+                        "less cash than the modeled bridge requirement."
                     )
 
                 else:
 
-                    improved_flow = (
-                        current_cash_flow
-                        + loan["emi"]
-                    )
-
                     st.success(
-                        f"After closing this loan, monthly cash flow "
-                        f"would improve by {money(loan['emi'])}."
+                        "This foreclosure does not destroy "
+                        "the modeled bridge reserve."
                     )
 
                     st.write(
-                        f"Estimated new monthly cash flow: "
-                        f"**{money(improved_flow)}**"
+                        f"New monthly cash flow would be "
+                        f"**{money(improved_cash_flow)}**."
                     )
 
-                    if improved_flow >= 0:
+                    if improved_cash_flow >= 0:
 
                         st.success(
-                            "🎯 This foreclosure could eliminate the "
-                            "current monthly structural deficit."
+                            "🎯 This could eliminate the current "
+                            "monthly deficit."
                         )
 
                     else:
 
                         st.warning(
-                            "This foreclosure helps but does not "
+                            "This helps but does not fully "
                             "eliminate the monthly deficit."
                         )
 
-                    if st.button(
-                        "Save this foreclosure quote",
-                        key=f"save_quote_{loan['id']}"
-                    ):
+                if st.button(
+                    "💾 Save Foreclosure Quote",
+                    key="save_foreclosure"
+                ):
 
-                        conn = db()
-                        cur = conn.cursor()
+                    conn = get_db()
+                    cur = conn.cursor()
 
-                        cur.execute("""
-                            INSERT INTO foreclosures
-                            (
-                                loan_id,
-                                quote_date,
-                                foreclosure_amount,
-                                valid_until,
-                                note
-                            )
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (
-                            int(loan["id"]),
-                            str(date.today()),
-                            quote,
-                            "",
-                            "Entered from Command Center"
-                        ))
-
-                        conn.commit()
-                        conn.close()
-
-                        st.success(
-                            "Foreclosure quote saved."
+                    cur.execute("""
+                        INSERT INTO foreclosures
+                        (
+                            loan_id,
+                            quote_date,
+                            foreclosure_amount,
+                            valid_until,
+                            note
                         )
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        int(selected["id"]),
+                        str(date.today()),
+                        foreclosure_quote,
+                        "",
+                        "Manual lender quote"
+                    ))
 
-                        st.rerun()
+                    conn.commit()
+                    conn.close()
 
-    # --------------------------------------------------------
-    # CARD DECISION
-    # --------------------------------------------------------
+                    st.success(
+                        "Foreclosure quote saved."
+                    )
+
+                    st.rerun()
+
+    # ========================================================
+    # BEST FORECLOSURE
+    # ========================================================
 
     st.divider()
 
-    st.subheader("5️⃣ 💳 How much card rotation should I use?")
-
-    shortage_to_bridge = st.number_input(
-        "Actual amount you need to bridge this month",
-        min_value=0.0,
-        step=1000.0,
-        value=float(
-            max(
-                0,
-                -current_cash_flow
-            )
-        )
+    st.subheader(
+        "5️⃣ 🏆 Best Saved Foreclosure Option"
     )
 
-    if shortage_to_bridge <= 0:
+    if foreclosures.empty:
 
-        st.success(
-            "No card rotation is needed based on the current basic budget."
+        st.info(
+            "Save actual lender foreclosure quotes above "
+            "to compare them."
         )
 
     else:
 
-        cards_needed = 0
+        comparison = foreclosures.copy()
 
-        if not cards.empty:
+        comparison = comparison[
+            comparison["foreclosure_amount"] > 0
+        ].copy()
 
-            remaining = shortage_to_bridge
+        if comparison.empty:
 
-            for _, card in cards.iterrows():
+            st.info(
+                "No valid foreclosure quotes yet."
+            )
 
-                if remaining > 0:
+        else:
 
-                    cards_needed += 1
-                    remaining -= float(card["balance"])
+            comparison["efficiency"] = (
+                comparison["emi"]
+                / comparison["foreclosure_amount"]
+            )
 
-        estimated_fee = (
-            cards_needed
-            * cheq_fee
-        )
+            comparison = comparison.sort_values(
+                "efficiency",
+                ascending=False
+            )
 
-        st.write(
-            f"Estimated cards needed: **{cards_needed}**"
-        )
+            best = comparison.iloc[0]
 
-        st.write(
-            f"Estimated CheQ cost: **{money(estimated_fee)}**"
-        )
+            st.success(
+                f"Best monthly-cash-flow efficiency: "
+                f"**{best['loan_name']}**"
+            )
 
-        st.warning(
-            "Use the minimum number of cards and minimum amount "
-            "necessary. Card rotation is a bridge, not debt repayment."
-        )
+            st.write(
+                f"EMI: **{money(best['emi'])}**"
+            )
 
-    # --------------------------------------------------------
+            st.write(
+                f"Foreclosure quote: "
+                f"**{money(best['foreclosure_amount'])}**"
+            )
+
+            st.write(
+                f"Monthly EMI reduction per ₹ spent: "
+                f"**{best['efficiency']:.5f}**"
+            )
+
+    # ========================================================
     # NEW LOAN TEST
-    # --------------------------------------------------------
+    # ========================================================
 
     st.divider()
 
-    st.subheader("6️⃣ 🚫 New Loan Test")
+    st.subheader(
+        "6️⃣ 🚫 New Loan Test"
+    )
 
-    new_loan_emi = st.number_input(
-        "If I take a new loan, what will the EMI be?",
+    proposed_emi = st.number_input(
+        "Proposed new EMI",
         min_value=0.0,
         step=500.0,
         value=0.0
     )
 
-    if new_loan_emi > 0:
+    if proposed_emi > 0:
 
         new_flow = (
-            current_cash_flow
-            - new_loan_emi
+            current_flow
+            - proposed_emi
         )
 
         st.write(
             f"Current monthly cash flow: "
-            f"**{money(current_cash_flow)}**"
+            f"**{money(current_flow)}**"
         )
 
         st.write(
@@ -993,26 +1222,25 @@ with tab_command:
             f"**{money(new_flow)}**"
         )
 
-        if current_cash_flow < 0:
+        if current_flow < 0:
 
             st.error(
-                "🚨 You are already running a deficit. "
-                "A new EMI makes the structural problem worse."
+                "🚨 You already have a monthly deficit. "
+                "Taking another EMI makes the structural problem worse."
             )
 
         elif new_flow < 0:
 
             st.warning(
                 "The new loan would push your monthly cash flow "
-                "back into deficit."
+                "into negative territory."
             )
 
         else:
 
             st.info(
-                "The new EMI does not create a negative monthly "
-                "cash flow under the current assumptions, but "
-                "check total repayment and fees."
+                "The new EMI does not create a monthly deficit "
+                "under these assumptions, but compare total repayment."
             )
 
 
@@ -1020,105 +1248,105 @@ with tab_command:
 # FORECAST TAB
 # ============================================================
 
-with tab_forecast:
+with tab2:
 
-    st.header("📊 EMI Forecast")
+    st.header("📊 24-Month Forecast")
 
-    show = forecast.drop(
-        columns=["details"]
-    ).copy()
+    display = forecast.copy()
 
-    show = show.rename(
+    display = display.rename(
         columns={
-            "label": "Month",
+            "month": "Month",
             "salary": "Salary",
             "living": "Living Expenses",
             "emi": "EMIs",
             "cash_flow": "Monthly Cash Flow",
-            "active_loans": "Active Loans",
+            "active_loans": "Active Loans"
         }
     )
 
-    for col in [
+    for column in [
         "Salary",
         "Living Expenses",
         "EMIs",
-        "Monthly Cash Flow",
+        "Monthly Cash Flow"
     ]:
-        show[col] = show[col].apply(money)
+
+        display[column] = (
+            display[column]
+            .apply(money)
+        )
 
     st.dataframe(
-        show[
-            [
-                "Month",
-                "Salary",
-                "Living Expenses",
-                "EMIs",
-                "Monthly Cash Flow",
-                "Active Loans",
-            ]
-        ],
+        display,
         use_container_width=True,
         hide_index=True
     )
 
-    st.subheader("EMI trend")
+    st.subheader("EMI Trend")
 
-    chart = forecast[
-        ["label", "emi"]
+    emi_chart = forecast[
+        ["month", "emi"]
     ].copy()
 
-    chart = chart.set_index("label")
+    emi_chart = emi_chart.set_index(
+        "month"
+    )
 
-    st.line_chart(chart)
+    st.line_chart(
+        emi_chart
+    )
 
-    st.subheader("Cash-flow trend")
+    st.subheader("Cash-Flow Trend")
 
-    cash_chart = forecast[
-        ["label", "cash_flow"]
+    flow_chart = forecast[
+        ["month", "cash_flow"]
     ].copy()
 
-    cash_chart = cash_chart.set_index("label")
+    flow_chart = flow_chart.set_index(
+        "month"
+    )
 
-    st.line_chart(cash_chart)
+    st.line_chart(
+        flow_chart
+    )
 
 
 # ============================================================
 # LOANS TAB
 # ============================================================
 
-with tab_loans:
+with tab3:
 
     st.header("🏦 Loans")
 
-    if loans.empty:
+    if not loans.empty:
 
-        st.info("No loans.")
+        loan_display = loans.copy()
 
-    else:
+        loan_display["emi"] = (
+            loan_display["emi"]
+            .apply(money)
+        )
 
-        display = loans.copy()
-
-        display["emi"] = display["emi"].apply(money)
-
-        display = display.rename(
+        loan_display = loan_display.rename(
             columns={
                 "name": "Loan",
                 "emi": "EMI",
                 "months_left": "Months Left",
                 "emi_date": "EMI Date",
-                "notes": "Notes",
+                "notes": "Notes"
             }
         )
 
         st.dataframe(
-            display[
+            loan_display[
                 [
                     "Loan",
                     "EMI",
                     "Months Left",
                     "EMI Date",
-                    "Notes",
+                    "Notes"
                 ]
             ],
             use_container_width=True,
@@ -1127,86 +1355,13 @@ with tab_loans:
 
     st.divider()
 
-    st.subheader("➕ Add Loan")
-
-    with st.form("add_loan"):
-
-        new_name = st.text_input("Loan name")
-
-        new_emi = st.number_input(
-            "EMI",
-            min_value=0.0,
-            step=100.0
-        )
-
-        new_months = st.number_input(
-            "Remaining months",
-            min_value=0,
-            step=1
-        )
-
-        new_date = st.number_input(
-            "EMI date",
-            min_value=1,
-            max_value=31,
-            value=1,
-            step=1
-        )
-
-        new_notes = st.text_input("Notes")
-
-        submitted = st.form_submit_button(
-            "Add Loan"
-        )
-
-        if submitted:
-
-            if not new_name.strip():
-
-                st.error("Enter a loan name.")
-
-            elif new_emi <= 0:
-
-                st.error("Enter a valid EMI.")
-
-            else:
-
-                try:
-
-                    conn = db()
-                    cur = conn.cursor()
-
-                    cur.execute("""
-                        INSERT INTO loans
-                        (name, emi, months_left, emi_date, notes)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        new_name.strip(),
-                        new_emi,
-                        int(new_months),
-                        int(new_date),
-                        new_notes
-                    ))
-
-                    conn.commit()
-                    conn.close()
-
-                    st.success("Loan added.")
-                    st.rerun()
-
-                except sqlite3.IntegrityError:
-
-                    st.error(
-                        "A loan with this name already exists."
-                    )
-
-    st.divider()
-
-    st.subheader("✏️ Update Loan")
+    st.subheader(
+        "✏️ Update Loan"
+    )
 
     if not loans.empty:
 
-        selected_id = st.selectbox(
+        loan_id = st.selectbox(
             "Select loan",
             loans["id"].tolist(),
             format_func=lambda x:
@@ -1217,10 +1372,17 @@ with tab_loans:
         )
 
         selected = loans[
-            loans["id"] == selected_id
+            loans["id"] == loan_id
         ].iloc[0]
 
-        updated_months = st.number_input(
+        new_emi = st.number_input(
+            "EMI",
+            min_value=0.0,
+            value=float(selected["emi"]),
+            step=100.0
+        )
+
+        new_months = st.number_input(
             "Months remaining",
             min_value=0,
             max_value=120,
@@ -1228,200 +1390,180 @@ with tab_loans:
             step=1
         )
 
-        updated_emi = st.number_input(
-            "EMI",
-            min_value=0.0,
-            value=float(selected["emi"]),
-            step=100.0
-        )
-
-        if st.button("Save Loan Changes"):
-
-            conn = db()
-            cur = conn.cursor()
-
-            cur.execute("""
-                UPDATE loans
-                SET months_left=?, emi=?
-                WHERE id=?
-            """, (
-                int(updated_months),
-                updated_emi,
-                int(selected_id)
-            ))
-
-            conn.commit()
-            conn.close()
-
-            st.success("Loan updated.")
-            st.rerun()
-
-    st.divider()
-
-    st.subheader("💰 Record EMI Payment")
-
-    if not loans.empty:
-
-        payment_id = st.selectbox(
-            "Loan",
-            loans["id"].tolist(),
-            format_func=lambda x:
-                loans.loc[
-                    loans["id"] == x,
-                    "name"
-                ].iloc[0],
-            key="payment_loan"
-        )
-
-        payment_loan = loans[
-            loans["id"] == payment_id
-        ].iloc[0]
-
-        payment_amount = st.number_input(
-            "Payment amount",
-            min_value=0.0,
-            value=float(payment_loan["emi"]),
-            step=100.0
-        )
-
-        payment_day = st.date_input(
-            "Payment date",
-            value=date.today()
-        )
-
-        payment_note = st.text_input(
-            "Payment note"
-        )
-
         if st.button(
-            "Record Payment"
+            "Save Loan"
         ):
 
-            conn = db()
+            conn = get_db()
             cur = conn.cursor()
 
             cur.execute("""
-                INSERT INTO payments
-                (loan_id, payment_date, amount, note)
-                VALUES (?, ?, ?, ?)
-            """, (
-                int(payment_id),
-                str(payment_day),
-                payment_amount,
-                payment_note
-            ))
-
-            # Only reduce months if there are months left.
-            new_months = max(
-                0,
-                int(payment_loan["months_left"]) - 1
-            )
-
-            cur.execute("""
                 UPDATE loans
-                SET months_left=?
+                SET emi=?, months_left=?
                 WHERE id=?
             """, (
-                new_months,
-                int(payment_id)
+                new_emi,
+                int(new_months),
+                int(loan_id)
             ))
 
             conn.commit()
             conn.close()
 
             st.success(
-                f"Payment recorded for {payment_loan['name']}."
+                "Loan updated."
             )
 
             st.rerun()
 
     st.divider()
 
-    st.subheader("📋 Saved Foreclosure Quotes")
+    st.subheader(
+        "➕ Add New Loan"
+    )
 
-    if not foreclosures.empty:
+    with st.form("new_loan"):
 
-        fd = foreclosures.copy()
-
-        fd["foreclosure_amount"] = fd[
-            "foreclosure_amount"
-        ].apply(money)
-
-        fd["emi"] = fd["emi"].apply(money)
-
-        fd["monthly_reduction_per_rupee"] = (
-            foreclosures["emi"]
-            / foreclosures["foreclosure_amount"]
-        ).round(5)
-
-        st.dataframe(
-            fd[
-                [
-                    "loan_name",
-                    "emi",
-                    "months_left",
-                    "quote_date",
-                    "foreclosure_amount",
-                    "monthly_reduction_per_rupee",
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True
+        loan_name = st.text_input(
+            "Loan name"
         )
 
-    else:
-
-        st.info(
-            "No foreclosure quotes saved yet."
+        loan_emi = st.number_input(
+            "EMI",
+            min_value=0.0,
+            step=100.0
         )
+
+        loan_months = st.number_input(
+            "Months remaining",
+            min_value=0,
+            step=1
+        )
+
+        loan_date = st.number_input(
+            "EMI date",
+            min_value=1,
+            max_value=31,
+            value=1
+        )
+
+        loan_notes = st.text_input(
+            "Notes"
+        )
+
+        submit = st.form_submit_button(
+            "Add Loan"
+        )
+
+        if submit:
+
+            if not loan_name.strip():
+
+                st.error(
+                    "Enter a loan name."
+                )
+
+            elif loan_emi <= 0:
+
+                st.error(
+                    "Enter a valid EMI."
+                )
+
+            else:
+
+                try:
+
+                    conn = get_db()
+                    cur = conn.cursor()
+
+                    cur.execute("""
+                        INSERT INTO loans
+                        (
+                            name,
+                            emi,
+                            months_left,
+                            emi_date,
+                            notes
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        loan_name.strip(),
+                        loan_emi,
+                        int(loan_months),
+                        int(loan_date),
+                        loan_notes
+                    ))
+
+                    conn.commit()
+                    conn.close()
+
+                    st.success(
+                        "Loan added."
+                    )
+
+                    st.rerun()
+
+                except sqlite3.IntegrityError:
+
+                    st.error(
+                        "A loan with this name already exists."
+                    )
 
 
 # ============================================================
-# CARDS TAB
+# CARDS + CHEQ
 # ============================================================
 
-with tab_cards:
+with tab4:
 
-    st.header("💳 Credit Cards + CheQ")
+    st.header("💳 Cards + CheQ")
 
-    total_cards = (
+    total_card_balance = (
         cards["balance"].sum()
-        if not cards.empty else 0
+        if not cards.empty
+        else 0
     )
 
     st.metric(
         "Total Card Balance",
-        money(total_cards)
+        money(total_card_balance)
     )
 
     st.warning(
-        "CheQ rotation provides liquidity but does not remove "
-        "the underlying card debt. Fees must be treated as a real cost."
+        "Card rotation is a liquidity bridge. "
+        "It does not eliminate the underlying debt."
     )
 
     if not cards.empty:
 
-        cd = cards.copy()
+        card_display = cards.copy()
 
-        cd["balance"] = cd["balance"].apply(money)
-        cd["minimum_due"] = cd["minimum_due"].apply(money2)
+        card_display["balance"] = (
+            card_display["balance"]
+            .apply(money)
+        )
 
-        cd = cd.rename(
+        card_display["minimum_due"] = (
+            card_display["minimum_due"]
+            .apply(money2)
+        )
+
+        card_display = card_display.rename(
             columns={
                 "name": "Card",
                 "balance": "Balance",
                 "minimum_due": "Minimum Due",
-                "due_date": "Due Date",
+                "due_date": "Due Date"
             }
         )
 
         st.dataframe(
-            cd[
+            card_display[
                 [
                     "Card",
                     "Balance",
                     "Minimum Due",
-                    "Due Date",
+                    "Due Date"
                 ]
             ],
             use_container_width=True,
@@ -1430,7 +1572,9 @@ with tab_cards:
 
     st.divider()
 
-    st.subheader("🔄 Record CheQ Rotation")
+    st.subheader(
+        "🔄 Record Card Rotation"
+    )
 
     if not cards.empty:
 
@@ -1448,31 +1592,38 @@ with tab_cards:
         rotation_fee = st.number_input(
             "CheQ fee",
             min_value=0.0,
-            value=float(cheq_fee),
+            value=cheq_fee,
             step=100.0
         )
 
         rotation_date = st.date_input(
-            "Rotation date",
+            "Date",
             value=date.today()
         )
 
-        if st.button("Record Rotation"):
+        if st.button(
+            "Record Rotation"
+        ):
 
             if rotation_amount <= 0:
 
                 st.error(
-                    "Enter the amount rotated."
+                    "Enter a rotation amount."
                 )
 
             else:
 
-                conn = db()
+                conn = get_db()
                 cur = conn.cursor()
 
                 cur.execute("""
                     INSERT INTO card_rotations
-                    (card_name, rotation_date, amount, fee)
+                    (
+                        card_name,
+                        rotation_date,
+                        amount,
+                        fee
+                    )
                     VALUES (?, ?, ?, ?)
                 """, (
                     card_name,
@@ -1492,14 +1643,29 @@ with tab_cards:
 
     st.divider()
 
-    st.subheader("📋 Rotation History")
+    st.subheader(
+        "📋 Rotation History"
+    )
 
-    if not rotations.empty:
+    if rotations.empty:
+
+        st.info(
+            "No rotations recorded."
+        )
+
+    else:
 
         rd = rotations.copy()
 
-        rd["amount"] = rd["amount"].apply(money)
-        rd["fee"] = rd["fee"].apply(money2)
+        rd["amount"] = (
+            rd["amount"]
+            .apply(money)
+        )
+
+        rd["fee"] = (
+            rd["fee"]
+            .apply(money2)
+        )
 
         st.dataframe(
             rd,
@@ -1513,125 +1679,31 @@ with tab_cards:
         c1, c2 = st.columns(2)
 
         with c1:
+
             st.metric(
                 "Total Rotated",
                 money(total_rotated)
             )
 
         with c2:
+
             st.metric(
                 "Total CheQ Fees",
                 money2(total_fees)
             )
 
-    else:
-
-        st.info(
-            "No rotations recorded."
-        )
-
 
 # ============================================================
-# EXPENSES TAB
+# SETTINGS
 # ============================================================
 
-with tab_expenses:
-
-    st.header("💸 Expenses")
-
-    expense_data = pd.DataFrame(
-        [
-            {
-                "Category": category,
-                "Monthly Amount": amount
-            }
-            for category, amount in LIVING_EXPENSES.items()
-        ]
-    )
-
-    expense_data["Monthly Amount"] = (
-        expense_data["Monthly Amount"]
-        .apply(money)
-    )
-
-    st.dataframe(
-        expense_data,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.metric(
-        "Total Monthly Living",
-        money(living_total)
-    )
-
-    st.divider()
-
-    st.subheader("➕ Record Actual Expense")
-
-    with st.form("expense_form"):
-
-        expense_category = st.text_input(
-            "Category"
-        )
-
-        expense_amount = st.number_input(
-            "Amount",
-            min_value=0.0,
-            step=100.0
-        )
-
-        expense_date = st.date_input(
-            "Date",
-            value=date.today()
-        )
-
-        add_expense = st.form_submit_button(
-            "Save Expense"
-        )
-
-        if add_expense:
-
-            if expense_amount <= 0:
-
-                st.error(
-                    "Enter a valid amount."
-                )
-
-            else:
-
-                conn = db()
-                cur = conn.cursor()
-
-                cur.execute("""
-                    INSERT INTO expenses
-                    (category, amount, expense_date)
-                    VALUES (?, ?, ?)
-                """, (
-                    expense_category,
-                    expense_amount,
-                    str(expense_date)
-                ))
-
-                conn.commit()
-                conn.close()
-
-                st.success(
-                    "Expense saved."
-                )
-
-                st.rerun()
-
-
-# ============================================================
-# SETTINGS TAB
-# ============================================================
-
-with tab_settings:
+with tab5:
 
     st.header("⚙️ Settings")
 
-    st.subheader("Income")
+    st.subheader(
+        "Income"
+    )
 
     new_salary = st.number_input(
         "Monthly take-home salary",
@@ -1647,7 +1719,9 @@ with tab_settings:
         step=1000.0
     )
 
-    st.subheader("Cash")
+    st.subheader(
+        "Cash"
+    )
 
     new_cash = st.number_input(
         "Current cash / savings",
@@ -1663,16 +1737,20 @@ with tab_settings:
         step=1000.0
     )
 
-    st.subheader("CheQ")
+    st.subheader(
+        "CheQ"
+    )
 
-    new_fee = st.number_input(
+    new_cheq_fee = st.number_input(
         "CheQ fee per card",
         min_value=0.0,
         value=cheq_fee,
         step=100.0
     )
 
-    if st.button("💾 Save Settings"):
+    if st.button(
+        "💾 Save Settings"
+    ):
 
         save_setting(
             "salary",
@@ -1696,18 +1774,20 @@ with tab_settings:
 
         save_setting(
             "cheq_fee",
-            new_fee
+            new_cheq_fee
         )
 
         st.success(
-            "Settings saved successfully."
+            "Settings saved."
         )
 
         st.rerun()
 
     st.divider()
 
-    st.subheader("📈 Expected Salary Increase")
+    st.subheader(
+        "📈 Salary Scenario"
+    )
 
     increment = st.number_input(
         "Expected increment %",
@@ -1723,68 +1803,126 @@ with tab_settings:
     )
 
     st.metric(
-        "Projected Salary",
+        "Salary After Increment",
         money(projected_salary)
     )
 
     st.caption(
-        "This is only a planning scenario and does not change "
-        "your actual salary."
+        "This is only a scenario and does not change your current salary."
     )
 
     st.divider()
 
-    st.subheader("Current assumptions")
+    st.subheader(
+        "Current Assumptions"
+    )
 
     assumptions = pd.DataFrame(
         [
-            ["Forecast start", "26 Sep 2026"],
-            ["First forecast month", "October 2026"],
+            ["Forecast Start", "26 Sep 2026"],
+            ["First Forecast Month", "October 2026"],
             ["Salary", money(salary)],
-            ["Living expenses", money(living_total)],
-            ["Current cash", money(cash)],
+            ["Living Expenses", money(living_total)],
+            ["Current Cash", money(cash)],
             ["Bonus", money(bonus)],
-            ["Friend repayment", money(friend_repayment)],
-            ["Cash after friend", money(cash + bonus - friend_repayment)],
-            ["CheQ fee/card", money(cheq_fee)],
+            ["Friend Repayment", money(friend_repayment)],
+            [
+                "Cash After Friend",
+                money(
+                    cash
+                    + bonus
+                    - friend_repayment
+                )
+            ],
+            ["CheQ Fee", money(cheq_fee)],
         ],
-        columns=["Item", "Value"]
+        columns=[
+            "Item",
+            "Value"
+        ]
     )
 
-    st.table(assumptions)
+    st.table(
+        assumptions
+    )
 
     st.divider()
 
-    st.subheader("🗑️ Reset Database")
-
-    st.warning(
-        "Only use this if you want to completely reset the app "
-        "back to the original numbers."
+    st.subheader(
+        "🗑️ Reset App"
     )
 
-    if st.button("Reset Database"):
+    st.warning(
+        "This will delete your saved changes and restore the original loan/card numbers."
+    )
 
-        conn = db()
-        cur = conn.cursor()
+    if st.button(
+        "Reset All Data"
+    ):
 
-        cur.execute("DELETE FROM loans")
-        cur.execute("DELETE FROM cards")
-        cur.execute("DELETE FROM settings")
-        cur.execute("DELETE FROM payments")
-        cur.execute("DELETE FROM foreclosures")
-        cur.execute("DELETE FROM card_rotations")
-        cur.execute("DELETE FROM expenses")
+        try:
 
-        conn.commit()
-        conn.close()
+            conn = get_db()
+            cur = conn.cursor()
 
-        seed_database()
+            tables = [
+                "loans",
+                "cards",
+                "payments",
+                "foreclosures",
+                "card_rotations",
+                "expenses",
+                "settings"
+            ]
 
-        st.success(
-            "Database reset to default values."
-        )
+            for table in tables:
 
-        st.rerun()
+                cur.execute(
+                    f"DELETE FROM {table}"
+                )
+
+            conn.commit()
+            conn.close()
+
+            # Recreate defaults
+            setup_database()
+
+            save_setting(
+                "salary",
+                DEFAULT_SALARY
+            )
+
+            save_setting(
+                "bonus",
+                DEFAULT_BONUS
+            )
+
+            save_setting(
+                "cash",
+                DEFAULT_CASH
+            )
+
+            save_setting(
+                "friend_repayment",
+                DEFAULT_FRIEND_REPAYMENT
+            )
+
+            save_setting(
+                "cheq_fee",
+                DEFAULT_CHEQ_FEE
+            )
+
+            st.success(
+                "Everything has been reset."
+            )
+
+            st.rerun()
+
+        except Exception as e:
+
+            st.error(
+                f"Could not reset database: {e}"
+            )
 
 
 # ============================================================
@@ -1794,6 +1932,6 @@ with tab_settings:
 st.divider()
 
 st.caption(
-    "Debt Command Center • Forecast begins October 2026 • "
-    "Actual foreclosure quotes should come from the lender."
+    "Debt Command Center | Starting point: 26 Sep 2026 | "
+    "September EMIs already paid | Forecast begins October 2026"
 )
