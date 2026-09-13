@@ -1,4 +1,3 @@
-
 import sqlite3
 from datetime import date
 import pandas as pd
@@ -83,6 +82,7 @@ def setup_database():
             amount REAL DEFAULT 0,
             charge REAL DEFAULT 0,
             status TEXT DEFAULT 'Planned',
+            funded_by TEXT DEFAULT 'Friend',
             FOREIGN KEY(loan_id) REFERENCES loans(id)
         )
     """)
@@ -99,7 +99,12 @@ def setup_database():
         )
     """)
 
-    # Default settings
+    # Migrate: add funded_by if missing on existing DB
+    try:
+        cur.execute("ALTER TABLE foreclosures ADD COLUMN funded_by TEXT DEFAULT 'Friend'")
+    except sqlite3.OperationalError:
+        pass
+
     defaults = {
         "monthly_salary": "65000",
         "future_salary": "75000",
@@ -107,6 +112,8 @@ def setup_database():
         "pf_monthly": "1800",
         "friend_help_amount": "400000",
         "friend_balance": "400000",
+        "friend_amount_used": "0",
+        "friend_help_enabled": "0",
         "friend_repayment_mode": "Step-up",
         "friend_target_date": "2028-03-31",
         "starting_cash": "20000",
@@ -120,7 +127,6 @@ def setup_database():
             (k, v)
         )
 
-    # Seed loans only when absent
     loans = [
         ("Fibe", 9890, 6, 4, 63924, 0, 1, ""),
         ("Stashfin", 4199, 11, 2, 39058, 0, 1, "Rotatable only if needed"),
@@ -174,6 +180,16 @@ def get_setting(key, default=""):
     row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     conn.close()
     return row["value"] if row else default
+
+def get_setting_float(key, default=0.0):
+    try:
+        return float(get_setting(key, default))
+    except Exception:
+        return float(default)
+
+def get_setting_bool(key, default=False):
+    v = str(get_setting(key, "1" if default else "0")).strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 def set_setting(key, value):
     conn = db()
@@ -237,9 +253,9 @@ def effective_foreclosure(row):
     return float(row["foreclosure_amount"]) + float(row["foreclosure_charge"])
 
 def planned_foreclosures_df():
-    """Return loans marked Planned or Paid for foreclosure."""
     return qdf("""
         SELECT f.id, f.loan_id, f.foreclosure_date, f.amount, f.charge, f.status,
+               COALESCE(f.funded_by,'Friend') AS funded_by,
                l.name, l.emi, l.remaining_months
         FROM foreclosures f
         JOIN loans l ON l.id = f.loan_id
@@ -248,6 +264,13 @@ def planned_foreclosures_df():
     """)
 
 def foreclosed_loan_ids():
+    """
+    Return loan IDs to treat as closed in the forecast.
+    If friend_help_enabled is OFF, we still want to show the BASELINE EMI burden,
+    so we return an empty set (no loan is considered 'closed' for EMI purposes).
+    """
+    if not get_setting_bool("friend_help_enabled", False):
+        return set()
     d = planned_foreclosures_df()
     if d.empty:
         return set()
@@ -305,11 +328,6 @@ def forecast_df(months=24, salary_override=None):
     return pd.DataFrame(rows)
 
 def recommended_friend_plan():
-    """
-    Conservative package designed around the user's stated goal:
-    clear revolving cards and remove a few high-value EMIs without consuming
-    the entire friend-help amount.
-    """
     loans = loans_df()
     names = ["Flexipay", "Stashfin", "Instamoney"]
     selected = loans[loans["name"].isin(names)].copy()
@@ -323,47 +341,61 @@ def recommended_friend_plan():
 
 
 def friend_plan(months=24):
+    """
+    Build a step-up repayment schedule.
+    Repayment never pushes Cash Flow After Friend below zero.
+    Uses friend_balance as the starting outstanding.
+    """
     f = forecast_df(months)
-    balance = float(get_setting("friend_balance", get_setting("friend_help_amount", 400000)))
-    start = pd.to_datetime(get_setting("forecast_start", "2026-10-01"))
+    start_balance = float(get_setting("friend_balance", get_setting("friend_help_amount", 400000)))
+    balance = start_balance
 
-    # Dynamic repayment: low while cash flow is negative, then increasing as
-    # cash flow improves. The user can override individual targets in Settings.
     repayments = []
-    for _, r in f.iterrows():
+    for i, (_, r) in enumerate(f.iterrows()):
         cf = float(r["Cash Flow Before Friend"])
-        if balance <= 0:
-            pay = 0
-        elif cf <= 0:
-            pay = 0
-        elif cf < 10000:
-            pay = 10000
-        elif cf < 20000:
-            pay = 15000
-        elif cf < 30000:
-            pay = 25000
-        elif cf < 40000:
-            pay = 35000
-        else:
-            pay = 40000
 
-        # Never plan more than the remaining friend balance.
-        pay = min(pay, balance)
+        # Skip month 0 (start month) — no repayment the month you start
+        if i == 0 or balance <= 0 or cf <= 0:
+            pay = 0
+        else:
+            if cf < 10000:
+                pay = 10000
+            elif cf < 20000:
+                pay = 15000
+            elif cf < 30000:
+                pay = 25000
+            elif cf < 40000:
+                pay = 30000
+            else:
+                pay = 40000
+
+            pay = min(pay, balance)
+            pay = min(pay, max(0, cf))
+
         repayments.append(pay)
         balance -= pay
 
     f["Friend Repayment"] = repayments
     f["Cash Flow After Friend"] = f["Cash Flow Before Friend"] - f["Friend Repayment"]
-    f["Friend Balance"] = [
-        max(0, float(get_setting("friend_balance", 400000)) - sum(repayments[:i+1]))
-        for i in range(len(repayments))
-    ]
+    running = start_balance
+    balances = []
+    for pay in repayments:
+        running = max(0, running - pay)
+        balances.append(running)
+    f["Friend Balance"] = balances
     return f
 
 # -----------------------------
 # Sidebar
 # -----------------------------
 st.sidebar.title("💰 Debt Command Center")
+
+friend_on = get_setting_bool("friend_help_enabled", False)
+if friend_on:
+    st.sidebar.success("✅ Friend help: ON — foreclosures applied")
+else:
+    st.sidebar.info("ℹ️ Friend help: OFF — baseline EMI view")
+
 page = st.sidebar.radio(
     "Go to",
     [
@@ -382,18 +414,24 @@ page = st.sidebar.radio(
 # -----------------------------
 if page == "🏠 Command Center":
     st.title("🏠 Debt-Free Command Center")
-    st.caption("This app is designed to tell you what to do with your cash — not just record it.")
+    st.caption("This app tells you what to do with your cash — not just record it.")
 
     salary = float(get_setting("monthly_salary", 65000))
     future_salary = float(get_setting("future_salary", 75000))
     living = total_living()
     emi = total_emi()
     planned = planned_foreclosures_df()
-    planned_emi = float(planned["emi"].sum()) if not planned.empty else 0
+
+    # Effective EMI depends on whether friend help is enabled
+    if friend_on and not planned.empty:
+        planned_emi = float(planned["emi"].sum())
+    else:
+        planned_emi = 0.0
     effective_current_emi = max(0, emi - planned_emi)
+
     cards = total_cards()
-    friend = float(get_setting("friend_balance", get_setting("friend_help_amount", 400000)))
-    cash = float(get_setting("starting_cash", 20000))
+    friend_balance = float(get_setting("friend_balance", get_setting("friend_help_amount", 400000)))
+    friend_used = float(get_setting("friend_amount_used", 0))
     pf = float(get_setting("pf_monthly", 1800))
 
     c1, c2, c3, c4 = st.columns(4)
@@ -402,10 +440,20 @@ if page == "🏠 Command Center":
     c3.metric("Active loan EMIs", money(effective_current_emi))
     c4.metric("Card balances", money(cards))
 
+    if friend_on:
+        st.success(
+            f"✅ Friend help is **ON**. {money(planned_emi)}/month of EMIs are removed "
+            f"from the forecast. Friend balance: {money(friend_balance)}."
+        )
+    else:
+        st.info(
+            "ℹ️ Friend help is **OFF**. The forecast below shows your **baseline EMI burden**. "
+            "Go to 🤝 Friend Loan to draw an amount and enable the plan."
+        )
+
     st.divider()
 
-    # One-click debt restructuring scenario
-    st.subheader("🎯 Apply the recommended ₹4L debt-restructuring scenario")
+    st.subheader("🎯 Recommended ₹4L debt-restructuring scenario")
     rec, rec_loan_cost, rec_emi_freed, rec_card_cost, rec_total_use, rec_friend_cash = recommended_friend_plan()
     rec_left = rec_friend_cash - rec_total_use
 
@@ -433,30 +481,37 @@ if page == "🏠 Command Center":
             if not exists:
                 conn.execute("""
                     INSERT INTO foreclosures
-                    (loan_id, foreclosure_date, amount, charge, status)
-                    VALUES (?,?,?,?,?)
+                    (loan_id, foreclosure_date, amount, charge, status, funded_by)
+                    VALUES (?,?,?,?,?,?)
                 """, (
                     int(r["id"]),
                     forecast_date,
                     float(r["foreclosure_amount"]),
                     float(r["foreclosure_charge"]),
-                    "Planned"
+                    "Planned",
+                    "Friend",
                 ))
 
-        # Only clear cards in the scenario after the user explicitly clicks Apply.
         conn.execute("UPDATE cards SET balance=0, minimum_due=0 WHERE active=1")
         conn.commit()
         conn.close()
 
+        # Consume the recommended total from friend balance, enable friend help
+        used_now = rec_total_use
+        new_balance = max(0, rec_friend_cash - used_now)
+        set_setting("friend_amount_used", float(get_setting("friend_amount_used", 0)) + used_now)
+        set_setting("friend_balance", new_balance)
+        set_setting("friend_help_enabled", "1")
+
         st.success(
-            "Scenario applied. The forecast now removes the selected loan EMIs and the card balances are ₹0."
+            "Scenario applied. Friend help is now ON, EMIs removed, cards cleared."
         )
         st.rerun()
 
-    # Current cashflow
+    # Current cashflow — uses effective EMI
     current_cf = salary - living - effective_current_emi
     st.subheader("1. Your current monthly position")
-    if not planned.empty:
+    if friend_on and not planned.empty:
         st.success(
             f"Forecast is applying {len(planned)} planned foreclosure(s), "
             f"freeing {money(planned_emi)}/month."
@@ -469,8 +524,7 @@ if page == "🏠 Command Center":
 
     if current_cf < 0:
         st.error(
-            f"⚠️ You are short by {money(abs(current_cf))} before any friend repayment. "
-            "Do not take a new loan to cover this gap."
+            f"⚠️ You are short by {money(abs(current_cf))} before any friend repayment."
         )
     else:
         st.success(f"Monthly cash flow is positive by {money(current_cf)} before friend repayment.")
@@ -527,8 +581,7 @@ if page == "🏠 Command Center":
     if cards > 0:
         st.warning(
             f"💳 Cards still carry about {money(cards)}. "
-            f"Recent logged CheQ fees: {money(recent_fees)}. "
-            "Clearing a card and then recycling it through CheQ does not eliminate the debt."
+            f"Recent logged CheQ fees: {money(recent_fees)}."
         )
     else:
         st.success("Cards are currently at ₹0 in the tracker. Keep them from rebuilding.")
@@ -584,6 +637,11 @@ if page == "🏠 Command Center":
 elif page == "📊 Forecast":
     st.title("📊 24-Month Cashflow Forecast")
 
+    if friend_on:
+        st.success("✅ Showing forecast **with** friend help applied.")
+    else:
+        st.info("ℹ️ Showing forecast **without** friend help (baseline EMI burden). Enable it in 🤝 Friend Loan.")
+
     f = friend_plan(24)
     st.dataframe(
         f.style.format({
@@ -608,8 +666,7 @@ elif page == "📊 Forecast":
     st.line_chart(f.set_index("Month")[["Friend Balance"]])
 
     st.caption(
-        "Forecast uses your editable salary assumptions, living expenses, remaining EMI months, "
-        "and step-up friend repayment rules. It does not assume a future bonus unless you enter one."
+        "Toggle friend help in 🤝 Friend Loan to switch between baseline EMI and post-foreclosure EMI."
     )
 
 # -----------------------------
@@ -947,144 +1004,230 @@ elif page == "🧾 Expenses":
 # Friend Loan
 # -----------------------------
 elif page == "🤝 Friend Loan":
-    st.title("🤝 Friend Loan — Step-Up Repayment Manager")
+    st.title("🤝 Friend Loan — Withdrawal & Step-Up Manager")
 
     amount = float(get_setting("friend_help_amount", 400000))
     balance = float(get_setting("friend_balance", amount))
+    used = float(get_setting("friend_amount_used", 0))
     target = get_setting("friend_target_date", "2028-03-31")
+    enabled = get_setting_bool("friend_help_enabled", False)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Original friend help", money(amount))
-    c2.metric("Current friend balance", money(balance))
-    c3.metric("Target date", target)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Agreed friend help", money(amount))
+    c2.metric("Already withdrawn", money(used))
+    c3.metric("Outstanding to friend", money(balance))
+    c4.metric("Target date", target)
+
+    if enabled:
+        st.success("✅ Friend help is currently **ON** — foreclosures are applied to the forecast.")
+    else:
+        st.warning(
+            "⚠️ Friend help is currently **OFF** — the forecast shows baseline EMI. "
+            "Draw an amount below and enable it to apply foreclosures."
+        )
 
     st.info(
-        "Important: the friend help is a lump-sum source of cash, NOT monthly income. "
-        "It only improves your monthly EMI cash flow after you use it to actually close loans. "
-        "This page now lets you apply the debt plan directly."
+        "Friend money is a **lump-sum withdrawal**, not monthly income. "
+        "It only helps your monthly cash flow after you use it to close loans. "
+        "Choose exactly how much to draw using the controls below."
     )
 
-    # Recommended package
-    st.subheader("⭐ Recommended starting package")
-    rec, loan_cost, emi_freed, card_cost, total_use, friend_cash = recommended_friend_plan()
-    left = friend_cash - total_use
+    st.divider()
 
-    st.write(
-        "The app's conservative starting package is: "
-        "**Flexipay + Stashfin + Instamoney + clear the 3 card balances**."
+    # ---------------------------------------------------------
+    # 1. Choose how much of the friend money to draw
+    # ---------------------------------------------------------
+    st.subheader("1. Choose how much of the friend money to draw")
+
+    available_to_draw = max(0.0, amount - used)
+
+    draw_amount = st.number_input(
+        "Amount to draw from friend",
+        min_value=0.0,
+        max_value=float(available_to_draw),
+        value=float(min(available_to_draw, 400000)),
+        step=5000.0,
+        help=f"You have {money(available_to_draw)} left un-drawn out of {money(amount)}.",
     )
 
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Loan closures", money(loan_cost))
-    r2.metric("Cards to clear", money(card_cost))
-    r3.metric("Total used", money(total_use))
-    r4.metric("Friend cash left", money(max(0, left)))
+    st.caption(
+        f"Available to draw: **{money(available_to_draw)}** "
+        f"(Agreed {money(amount)} − Already withdrawn {money(used)})"
+    )
 
-    if left < 50000:
-        st.warning("This package would leave less than ₹50k of friend cash. Consider a smaller package.")
+    # ---------------------------------------------------------
+    # 2. Pick which loans the draw should close
+    # ---------------------------------------------------------
+    st.subheader("2. Pick which loans to close with this draw")
+
+    loans = loans_df()
+    closable = loans[(loans["foreclosure_amount"] > 0) & (loans["remaining_months"] > 0)].copy()
+    closable["Total Close"] = closable["foreclosure_amount"] + closable["foreclosure_charge"]
+
+    if closable.empty:
+        st.warning("No loans have a foreclosure quote entered yet.")
+    else:
+        closable["Suggested"] = closable["name"].isin(
+            ["Flexipay", "Stashfin", "Instamoney"]
+        )
+        closable = closable.sort_values(
+            ["Suggested", "Total Close"], ascending=[False, False]
+        )
+
+        options = closable["name"].tolist()
+        default_sel = closable[closable["Suggested"]]["name"].tolist()
+
+        selected_loans = st.multiselect(
+            "Loans to foreclose with friend money",
+            options=options,
+            default=default_sel,
+        )
+
+        chosen = closable[closable["name"].isin(selected_loans)]
+        loan_cost = float(chosen["Total Close"].sum()) if not chosen.empty else 0.0
+        emi_freed = float(chosen["emi"].sum()) if not chosen.empty else 0.0
+
+        st.write(
+            f"Selected loans close cost: **{money(loan_cost)}** "
+            f"| EMI freed: **{money(emi_freed)}/month**"
+        )
+
+    # ---------------------------------------------------------
+    # 3. Optional card clearance
+    # ---------------------------------------------------------
+    st.subheader("3. Clear cards with the same draw?")
+    cards = cards_df()
+    total_card_bal = float(cards["balance"].sum()) if not cards.empty else 0
+    clear_cards = st.checkbox(
+        f"Yes, clear all card balances ({money(total_card_bal)})",
+        value=(total_card_bal > 0),
+    )
+    card_cost = total_card_bal if clear_cards else 0.0
+
+    # ---------------------------------------------------------
+    # 4. Check the draw covers the chosen package
+    # ---------------------------------------------------------
+    st.subheader("4. Summary")
+    total_use = loan_cost + card_cost
+    leftover = draw_amount - total_use
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Draw amount", money(draw_amount))
+    s2.metric("Loans to close", money(loan_cost))
+    s3.metric("Cards to clear", money(card_cost))
+    s4.metric("Left un-used from draw", money(max(0, leftover)))
+
+    if total_use > draw_amount:
+        st.error(
+            f"❌ Selected package costs {money(total_use)}, "
+            f"but your draw is only {money(draw_amount)}. "
+            "Reduce the loan selection, uncheck cards, or increase the draw."
+        )
     else:
         st.success(
-            f"This package leaves about {money(left)} of friend cash while freeing about "
-            f"{money(emi_freed)}/month in EMIs."
+            f"✅ Draw of {money(draw_amount)} covers the package "
+            f"({money(total_use)}) and frees {money(emi_freed)}/month."
         )
 
-    if not rec.empty:
-        st.dataframe(
-            rec[["name", "emi", "remaining_months", "Total Close"]]
-            .rename(columns={
-                "name": "Loan",
-                "emi": "EMI freed",
-                "remaining_months": "Months left",
-                "Total Close": "Close cost",
-            }).style.format({
-                "EMI freed": "₹{:,.0f}",
-                "Close cost": "₹{:,.0f}",
-            }),
-            use_container_width=True,
-            hide_index=True,
-        )
+    # ---------------------------------------------------------
+    # 5. Apply
+    # ---------------------------------------------------------
+    apply_disabled = total_use > draw_amount or total_use <= 0
+    apply = st.button(
+        "🚀 Apply draw & foreclosures",
+        type="primary",
+        disabled=apply_disabled,
+    )
 
-    apply = st.button("🚀 Apply this package to my forecast", type="primary")
     if apply:
-        # Mark recommended loans as planned. Cards are cleared because the package explicitly includes them.
         conn = db()
-        for _, r in rec.iterrows():
+        forecast_date = pd.to_datetime(
+            get_setting("forecast_start", "2026-10-01")
+        ).date().isoformat()
+
+        # Remove any existing "Planned" foreclosures from a previous run
+        conn.execute("DELETE FROM foreclosures WHERE status='Planned'")
+
+        # Insert new foreclosures
+        for _, r in chosen.iterrows():
             conn.execute("""
-                INSERT INTO foreclosures(loan_id,foreclosure_date,amount,charge,status)
-                SELECT ?,?,?,?,?,?
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM foreclosures
-                    WHERE loan_id=? AND status IN ('Planned','Paid')
-                )
+                INSERT INTO foreclosures
+                (loan_id, foreclosure_date, amount, charge, status, funded_by)
+                VALUES (?,?,?,?,?,?)
             """, (
                 int(r["id"]),
-                pd.to_datetime(get_setting("forecast_start", "2026-10-01")).date().isoformat(),
+                forecast_date,
                 float(r["foreclosure_amount"]),
                 float(r["foreclosure_charge"]),
                 "Planned",
-                int(r["id"])
+                "Friend",
             ))
-        conn.execute("UPDATE cards SET balance=0, minimum_due=0 WHERE active=1")
+
+        # Clear cards if chosen
+        if clear_cards:
+            conn.execute("UPDATE cards SET balance=0, minimum_due=0 WHERE active=1")
+
         conn.commit()
         conn.close()
+
+        # Update friend usage / balance
+        new_used = used + total_use
+        new_balance = max(0.0, amount - new_used)
+
+        set_setting("friend_amount_used", new_used)
+        set_setting("friend_balance", new_balance)
+        set_setting("friend_help_enabled", "1")
+
         st.success(
-            "Package applied. Flexipay/Stashfin/Instamoney are now treated as planned closures, "
-            "and the card balances are set to ₹0. Your forecast will now use the reduced EMI."
+            f"Applied. Friend help is now ON. "
+            f"Used {money(total_use)}, outstanding to friend {money(new_balance)}."
         )
         st.rerun()
+
+    # ---------------------------------------------------------
+    # Quick reset
+    # ---------------------------------------------------------
+    if used > 0 or enabled:
+        st.divider()
+        st.subheader("Reset friend help")
+        st.caption("This clears all Planned foreclosures, restores card balances is NOT automatic — update them manually if needed, and sets friend help to OFF.")
+        if st.button("🔁 Reset friend help (keep card balances as-is)"):
+            conn = db()
+            conn.execute("DELETE FROM foreclosures WHERE status='Planned'")
+            conn.commit()
+            conn.close()
+            set_setting("friend_amount_used", 0)
+            set_setting("friend_balance", amount)
+            set_setting("friend_help_enabled", "0")
+            st.success("Friend help reset.")
+            st.rerun()
 
     st.divider()
     st.subheader("Step-up rules")
     st.write("""
-    The built-in rule is intentionally conservative:
     - Negative cash flow → ₹0 friend payment
     - ₹0–₹10k cash flow → ₹10k
     - ₹10k–₹20k → ₹15k
     - ₹20k–₹30k → ₹25k
-    - ₹30k–₹40k → ₹35k
+    - ₹30k–₹40k → ₹30k
     - Above ₹40k → ₹40k
+    - Repayment never pushes Cash Flow After Friend below zero.
     """)
-
-    with st.form("friend_settings"):
-        new_amount = st.number_input(
-            "Friend help amount",
-            value=amount,
-            min_value=0.0,
-            step=5000.0,
-        )
-        new_balance = st.number_input(
-            "Current friend balance",
-            value=balance,
-            min_value=0.0,
-            step=5000.0,
-        )
-        target_date = st.date_input(
-            "Target repayment date",
-            value=pd.to_datetime(target).date(),
-        )
-        save = st.form_submit_button("Save friend-loan settings")
-
-    if save:
-        set_setting("friend_help_amount", new_amount)
-        set_setting("friend_balance", new_balance)
-        set_setting("friend_target_date", target_date.isoformat())
-        st.success("Friend-loan settings saved.")
-        st.rerun()
 
     st.subheader("Projected step-up schedule")
     current_planned = planned_foreclosures_df()
-    if current_planned.empty:
+    if not enabled:
         st.warning(
-            "⚠️ No foreclosure has been applied yet. The schedule below is therefore showing "
-            "the original EMI burden. Apply the recommended scenario above or mark individual "
-            "foreclosures under 🏦 Loans & Foreclosures."
+            "⚠️ Friend help is OFF. The schedule below is the **baseline EMI burden**. "
+            "Draw an amount above and click Apply to switch to the reduced-EMI view."
         )
-    else:
+    elif not current_planned.empty:
         freed = float(current_planned["emi"].sum())
         st.success(
             f"✅ Forecast is using {len(current_planned)} planned foreclosure(s) and "
             f"has removed {money(freed)}/month of EMI."
         )
+
     fp = friend_plan(24)
     st.dataframe(
         fp[["Month", "Salary", "EMI", "Cash Flow Before Friend",
@@ -1185,15 +1328,29 @@ elif page == "⚙️ Settings":
         st.rerun()
 
     st.divider()
+    st.subheader("Friend help master switch")
+    friend_on_now = get_setting_bool("friend_help_enabled", False)
+    new_state = st.toggle(
+        "Enable friend help in forecast",
+        value=friend_on_now,
+        help="When OFF, forecast shows baseline EMI. When ON, planned foreclosures are applied.",
+    )
+    if new_state != friend_on_now:
+        set_setting("friend_help_enabled", "1" if new_state else "0")
+        st.rerun()
+
+    st.divider()
     st.subheader("Current setup summary")
     st.write({
         "Salary now": money(float(get_setting("monthly_salary"))),
         "Expected salary": money(float(get_setting("future_salary"))),
         "PF/month": money(float(get_setting("pf_monthly"))),
-        "Friend help": money(float(get_setting("friend_help_amount"))),
-        "Friend balance": money(float(get_setting("friend_balance"))),
+        "Friend help agreed": money(float(get_setting("friend_help_amount"))),
+        "Friend withdrawn": money(float(get_setting("friend_amount_used", 0))),
+        "Friend outstanding": money(float(get_setting("friend_balance"))),
+        "Friend help enabled": "ON" if get_setting_bool("friend_help_enabled") else "OFF",
         "Living expenses": money(total_living()),
-        "Loan EMI": money(total_emi()),
+        "Loan EMI (raw)": money(total_emi()),
         "Card balance": money(total_cards()),
     })
 
